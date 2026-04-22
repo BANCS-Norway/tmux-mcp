@@ -47,6 +47,7 @@ DEFAULT_LINES = 50
 SUBPROCESS_TIMEOUT = 5
 DEBUG_REQUESTS = os.environ.get("TMUX_MCP_DEBUG_REQUESTS", "").lower() in ("1", "true", "yes")
 DEBUG_BODY_MAX = 8192  # truncate logged request bodies to avoid flooding logs
+CLAUDE_CHAT_COMPAT = os.environ.get("TMUX_MCP_CLAUDE_CHAT_COMPAT", "1").lower() in ("1", "true", "yes")
 
 PUBLIC_URL = os.environ.get("TMUX_MCP_PUBLIC_URL", "").rstrip("/")
 GH_CLIENT_ID = os.environ.get("TMUX_MCP_GITHUB_CLIENT_ID", "")
@@ -341,6 +342,102 @@ async def tmux_list_sessions() -> str:
 # ── Middleware ───────────────────────────────────────────────────────────────
 
 _debug_logger = logging.getLogger("tmux_mcp.debug")
+_compat_logger = logging.getLogger("tmux_mcp.compat")
+
+
+def _unwrap_chat_arguments(msg: dict) -> bool:
+    """Unwrap Claude Chat's double-encoded tools/call arguments in place.
+
+    Claude Chat (as of early 2026) serializes tool-call arguments as a JSON
+    string under a single top-level "params" key, instead of inlining the
+    keys on "arguments" directly. Detect that exact shape and repair it so
+    FastMCP's pydantic layer sees the real parameters.
+
+    Returns True if a rewrite happened.
+    """
+    if not isinstance(msg, dict) or msg.get("method") != "tools/call":
+        return False
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        return False
+    arguments = params.get("arguments")
+    if not (isinstance(arguments, dict) and set(arguments.keys()) == {"params"}):
+        return False
+    inner = arguments["params"]
+    if not isinstance(inner, str):
+        return False
+    try:
+        parsed = json.loads(inner)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    params["arguments"] = parsed
+    return True
+
+
+class ClaudeChatCompatMiddleware:
+    """Pure-ASGI middleware that repairs Claude Chat's malformed tools/call bodies.
+
+    Must be pure ASGI (not BaseHTTPMiddleware) because Starlette's
+    BaseHTTPMiddleware.call_next ignores modifications to request.receive and
+    wraps the original receive callable — so body mutations are dropped before
+    they reach the inner app.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        ct = headers.get(b"content-type", b"").decode("latin-1").lower()
+        if not ct.startswith("application/json"):
+            await self.app(scope, receive, send)
+            return
+
+        chunks: list[bytes] = []
+        more = True
+        while more:
+            msg = await receive()
+            if msg["type"] != "http.request":
+                await self.app(scope, receive, send)
+                return
+            chunks.append(msg.get("body", b""))
+            more = msg.get("more_body", False)
+        body = b"".join(chunks)
+
+        if body:
+            try:
+                payload = json.loads(body)
+                rewrote = False
+                if isinstance(payload, list):
+                    for item in payload:
+                        rewrote |= _unwrap_chat_arguments(item)
+                elif isinstance(payload, dict):
+                    rewrote = _unwrap_chat_arguments(payload)
+                if rewrote:
+                    body = json.dumps(payload).encode("utf-8")
+                    _compat_logger.info("repaired Claude Chat tools/call body on %s", scope.get("path"))
+            except json.JSONDecodeError:
+                pass
+
+        sent = False
+
+        async def replay_receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            # After delivering the buffered body, defer to the real upstream
+            # receive so MCP streamable-HTTP can observe genuine client
+            # disconnects while the SSE response streams.
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
 class RequestDebugMiddleware:
@@ -423,11 +520,19 @@ def main() -> None:
         print(f"Tailscale IP: http://{ts_ip}:{PORT}/mcp")
 
     app = mcp.streamable_http_app()
+    # Starlette applies middleware in reverse insertion order, so insert the
+    # compat shim FIRST and the debug logger LAST — that way debug sees the
+    # raw wire body and compat runs after, transparently to FastMCP.
+    if CLAUDE_CHAT_COMPAT:
+        logging.getLogger("tmux_mcp.compat").setLevel(logging.INFO)
+        app.add_middleware(ClaudeChatCompatMiddleware)
     if DEBUG_REQUESTS:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         _debug_logger.setLevel(logging.INFO)
         app.add_middleware(RequestDebugMiddleware)
         print("Request debug logging ENABLED (TMUX_MCP_DEBUG_REQUESTS=1)")
+    if not CLAUDE_CHAT_COMPAT:
+        print("Claude Chat compat shim DISABLED (TMUX_MCP_CLAUDE_CHAT_COMPAT=0)")
 
     config = uvicorn.Config(app, host=host, port=PORT, log_level=mcp.settings.log_level.lower())
     try:
