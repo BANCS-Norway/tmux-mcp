@@ -25,7 +25,9 @@ class FakeRun:
     def __call__(self, cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess:
         self.calls.append(list(cmd))
         stdout, stderr, rc = self._scripts.pop(0) if self._scripts else self.default
-        return subprocess.CompletedProcess(args=cmd, returncode=rc, stdout=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=rc, stdout=stdout, stderr=stderr
+        )
 
 
 @pytest.fixture
@@ -42,7 +44,9 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> FakeRun:
 
 
 class TestGetSummary:
-    async def test_builds_capture_pane_with_target_and_lines(self, fake_run: FakeRun) -> None:
+    async def test_builds_capture_pane_with_target_and_lines(
+        self, fake_run: FakeRun
+    ) -> None:
         from tmux_mcp import server
 
         fake_run._scripts = [("hello\nworld\n", "", 0)]
@@ -50,13 +54,21 @@ class TestGetSummary:
 
         assert len(fake_run.calls) == 1
         assert fake_run.calls[0] == [
-            "tmux", "capture-pane", "-p", "-t", "=milorg:.0", "-S", "-42",
+            "tmux",
+            "capture-pane",
+            "-p",
+            "-t",
+            "=milorg:.0",
+            "-S",
+            "-42",
         ]
         payload = json.loads(result)
         assert payload["target"] == "=milorg:.0"
         assert payload["lines_captured"] == 2
 
-    async def test_nonzero_exit_returns_json_error_with_hint(self, fake_run: FakeRun) -> None:
+    async def test_nonzero_exit_returns_json_error_with_hint(
+        self, fake_run: FakeRun
+    ) -> None:
         from tmux_mcp import server
 
         fake_run._scripts = [("", "can't find session milorg", 1)]
@@ -74,7 +86,9 @@ class TestGetSummary:
 
 
 class TestSendPrompt:
-    async def test_sends_literal_and_presses_enter_by_default(self, fake_run: FakeRun) -> None:
+    async def test_sends_literal_and_presses_enter_by_default(
+        self, fake_run: FakeRun
+    ) -> None:
         from tmux_mcp import server
 
         fake_run._scripts = [("", "", 0), ("", "", 0)]
@@ -85,7 +99,12 @@ class TestSendPrompt:
         assert len(fake_run.calls) == 2
         # Literal prompt first — note the -l flag to avoid interpreting "Enter" etc. as keys.
         assert fake_run.calls[0] == [
-            "tmux", "send-keys", "-t", "=milorg:.0", "-l", "echo hi",
+            "tmux",
+            "send-keys",
+            "-t",
+            "=milorg:.0",
+            "-l",
+            "echo hi",
         ]
         # Then a separate Enter keystroke (without -l so tmux treats it as a key).
         assert fake_run.calls[1] == ["tmux", "send-keys", "-t", "=milorg:.0", "Enter"]
@@ -104,7 +123,9 @@ class TestSendPrompt:
         assert "Enter" not in fake_run.calls[0]
         assert json.loads(result)["enter_pressed"] is False
 
-    async def test_send_failure_returns_json_error_with_hint(self, fake_run: FakeRun) -> None:
+    async def test_send_failure_returns_json_error_with_hint(
+        self, fake_run: FakeRun
+    ) -> None:
         from tmux_mcp import server
 
         fake_run._scripts = [("", "no such pane", 1)]
@@ -136,7 +157,11 @@ class TestListSessions:
         from tmux_mcp import server
 
         fake_run._scripts = [
-            ("milorg (1 windows, created X)\nbancs_blog (2 windows, created Y)\n", "", 0)
+            (
+                "milorg (1 windows, created X)\nbancs_blog (2 windows, created Y)\n",
+                "",
+                0,
+            )
         ]
         result = await server.tmux_list_sessions()
 
@@ -144,7 +169,9 @@ class TestListSessions:
         assert len(payload["sessions"]) == 2
         assert "milorg" in payload["sessions"][0]
 
-    async def test_failure_returns_json_error_with_hint(self, fake_run: FakeRun) -> None:
+    async def test_failure_returns_json_error_with_hint(
+        self, fake_run: FakeRun
+    ) -> None:
         from tmux_mcp import server
 
         fake_run._scripts = [("", "no server running on /tmp/tmux-1000/default", 1)]

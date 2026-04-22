@@ -55,10 +55,10 @@ CLIENTS_PATH = STATE_DIR / "clients.json"
 
 JWT_ALGORITHM = "RS256"
 JWT_ISSUER = "tmux-mcp"
-ACCESS_TOKEN_TTL = 3600       # 1h
+ACCESS_TOKEN_TTL = 3600  # 1h
 REFRESH_TOKEN_TTL = 60 * 60 * 24 * 30  # 30d
-AUTH_CODE_TTL = 600            # 10m
-PENDING_AUTH_TTL = 600         # 10m — github round-trip
+AUTH_CODE_TTL = 600  # 10m
+PENDING_AUTH_TTL = 600  # 10m — github round-trip
 
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -66,6 +66,7 @@ GITHUB_USER_URL = "https://api.github.com/user"
 
 
 # ── Key management ───────────────────────────────────────────────────────────
+
 
 def _load_or_create_jwt_key() -> tuple[str, str]:
     """Return (private_pem, public_pem). Auto-generates RSA 2048 on first run."""
@@ -82,14 +83,19 @@ def _load_or_create_jwt_key() -> tuple[str, str]:
         JWT_KEY_PATH.chmod(0o600)
 
     priv = serialization.load_pem_private_key(private_pem.encode(), password=None)
-    public_pem = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        priv.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     return private_pem, public_pem
 
 
 # ── DCR client store ─────────────────────────────────────────────────────────
+
 
 def _load_clients() -> dict[str, dict]:
     if not CLIENTS_PATH.exists():
@@ -107,16 +113,18 @@ def _save_clients(clients: dict[str, dict]) -> None:
 
 # ── In-memory state ──────────────────────────────────────────────────────────
 
+
 @dataclass
 class _PendingAuth:
     """Between /authorize and /oauth/github/callback."""
+
     client_id: str
     scopes: list[str]
     code_challenge: str
     redirect_uri: str
     redirect_uri_provided_explicitly: bool
     resource: str | None
-    mcp_state: str | None         # the MCP client's state param
+    mcp_state: str | None  # the MCP client's state param
     created_at: float = field(default_factory=time.time)
 
 
@@ -142,21 +150,28 @@ class GithubOAuthProvider(
         self.public_url = public_url.rstrip("/")
         self.gh_client_id = github_client_id
         self.gh_client_secret = github_client_secret
-        self.allowed_users = {u.strip().lower() for u in allowed_github_users if u.strip()}
+        self.allowed_users = {
+            u.strip().lower() for u in allowed_github_users if u.strip()
+        }
         if not self.allowed_users:
-            raise ValueError("TMUX_MCP_ALLOWED_GITHUB_USERS must list at least one user")
+            raise ValueError(
+                "TMUX_MCP_ALLOWED_GITHUB_USERS must list at least one user"
+            )
 
         self._private_pem, self._public_pem = _load_or_create_jwt_key()
         self._clients: dict[str, dict] = _load_clients()
-        self._pending: dict[str, _PendingAuth] = {}      # state → PendingAuth
-        self._codes: dict[str, _IssuedCode] = {}          # code → IssuedCode
+        self._pending: dict[str, _PendingAuth] = {}  # state → PendingAuth
+        self._codes: dict[str, _IssuedCode] = {}  # code → IssuedCode
 
     # ── DCR ──────────────────────────────────────────────────────────────
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id:
             client_info.client_id = f"mcp-{uuid.uuid4().hex[:16]}"
-        if client_info.token_endpoint_auth_method == "client_secret_basic" and not client_info.client_secret:
+        if (
+            client_info.token_endpoint_auth_method == "client_secret_basic"
+            and not client_info.client_secret
+        ):
             client_info.client_secret = secrets.token_urlsafe(32)
         self._clients[client_info.client_id] = client_info.model_dump(mode="json")
         _save_clients(self._clients)
@@ -184,12 +199,14 @@ class GithubOAuthProvider(
             mcp_state=params.state,
         )
         self._gc_pending()
-        qs = urlencode({
-            "client_id": self.gh_client_id,
-            "redirect_uri": f"{self.public_url}/oauth/github/callback",
-            "scope": "read:user",
-            "state": state,
-        })
+        qs = urlencode(
+            {
+                "client_id": self.gh_client_id,
+                "redirect_uri": f"{self.public_url}/oauth/github/callback",
+                "scope": "read:user",
+                "state": state,
+            }
+        )
         return f"{GITHUB_AUTHORIZE_URL}?{qs}"
 
     # ── GitHub callback (called from custom route, not abstract method) ──
@@ -276,7 +293,12 @@ class GithubOAuthProvider(
         )
 
     def _issue_tokens(
-        self, *, client_id: str, github_user: str, scopes: list[str], resource: str | None
+        self,
+        *,
+        client_id: str,
+        github_user: str,
+        scopes: list[str],
+        resource: str | None,
     ) -> OAuthToken:
         now = int(time.time())
         base = {
@@ -333,7 +355,9 @@ class GithubOAuthProvider(
         )
 
     async def exchange_refresh_token(
-        self, client: OAuthClientInformationFull, refresh_token: RefreshToken,
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
         claims = self._decode_jwt(refresh_token.token, expected_typ="refresh")

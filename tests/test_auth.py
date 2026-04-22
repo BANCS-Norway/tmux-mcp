@@ -52,7 +52,9 @@ def _make_params(state: str = "mcp-state-xyz") -> AuthorizationParams:
     )
 
 
-def _mock_httpx(monkeypatch: pytest.MonkeyPatch, *, login: str, include_token: bool = True) -> None:
+def _mock_httpx(
+    monkeypatch: pytest.MonkeyPatch, *, login: str, include_token: bool = True
+) -> None:
     """Wire httpx.AsyncClient to return a scripted GitHub token+user response."""
     import httpx
 
@@ -111,13 +113,17 @@ class TestAllowlist:
         await provider.authorize(_make_client(), params)
         state = next(iter(provider._pending))
 
-        _mock_httpx(monkeypatch, login="Alice")  # mixed case — GitHub often returns display-case
+        _mock_httpx(
+            monkeypatch, login="Alice"
+        )  # mixed case — GitHub often returns display-case
         redirect = await provider.handle_github_callback("gh-code", state)
 
         assert "code=" in redirect
         assert state not in provider._pending  # consumed
 
-    async def test_disallowed_user_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_disallowed_user_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         await provider.register_client(_make_client())
         await provider.authorize(_make_client(), _make_params())
@@ -127,7 +133,9 @@ class TestAllowlist:
         with pytest.raises(PermissionError, match="not in allowlist"):
             await provider.handle_github_callback("gh-code", state)
 
-    async def test_github_refusing_token_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_github_refusing_token_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         await provider.register_client(_make_client())
         await provider.authorize(_make_client(), _make_params())
@@ -185,7 +193,9 @@ class TestAuthorizeRoundtrip:
 
 
 class TestAuthorizationCodes:
-    async def test_code_expiry_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_code_expiry_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from tmux_mcp.auth import AUTH_CODE_TTL
 
         provider = _make_provider()
@@ -223,7 +233,9 @@ class TestAuthorizationCodes:
         # Second exchange fails because code is gone
         assert await provider.load_authorization_code(client, code_str) is None
 
-    async def test_code_wrong_client_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_code_wrong_client_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         client_a = _make_client("client-A")
         client_b = _make_client("client-B")
@@ -243,7 +255,9 @@ class TestAuthorizationCodes:
 
 
 class TestJwtIssuance:
-    async def test_access_and_refresh_tokens_differ(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_access_and_refresh_tokens_differ(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         client = _make_client()
         await provider.register_client(client)
@@ -280,7 +294,9 @@ class TestJwtIssuance:
         assert access_claims["sub"] == refresh_claims["sub"] == "alice"
         assert access_claims["aud"] == refresh_claims["aud"] == client.client_id
 
-    async def test_load_access_token_rejects_refresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_load_access_token_rejects_refresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         client = _make_client()
         await provider.register_client(client)
@@ -300,7 +316,9 @@ class TestJwtIssuance:
         # refresh token MUST NOT load as access
         assert await provider.load_access_token(tokens.refresh_token) is None
 
-    async def test_load_refresh_token_rejects_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_load_refresh_token_rejects_access(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         provider = _make_provider()
         client = _make_client()
         await provider.register_client(client)

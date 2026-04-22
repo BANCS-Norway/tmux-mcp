@@ -45,24 +45,36 @@ HOST_RAW = os.environ.get("TMUX_MCP_HOST", "0.0.0.0")
 DEFAULT_SESSION = os.environ.get("TMUX_MCP_SESSION") or None
 DEFAULT_LINES = 50
 SUBPROCESS_TIMEOUT = 5
-DEBUG_REQUESTS = os.environ.get("TMUX_MCP_DEBUG_REQUESTS", "").lower() in ("1", "true", "yes")
+DEBUG_REQUESTS = os.environ.get("TMUX_MCP_DEBUG_REQUESTS", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 DEBUG_BODY_MAX = 8192  # truncate logged request bodies to avoid flooding logs
-CLAUDE_CHAT_COMPAT = os.environ.get("TMUX_MCP_CLAUDE_CHAT_COMPAT", "1").lower() in ("1", "true", "yes")
+CLAUDE_CHAT_COMPAT = os.environ.get("TMUX_MCP_CLAUDE_CHAT_COMPAT", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 PUBLIC_URL = os.environ.get("TMUX_MCP_PUBLIC_URL", "").rstrip("/")
 GH_CLIENT_ID = os.environ.get("TMUX_MCP_GITHUB_CLIENT_ID", "")
 GH_CLIENT_SECRET = os.environ.get("TMUX_MCP_GITHUB_CLIENT_SECRET", "")
 ALLOWED_USERS = [
-    u for u in os.environ.get("TMUX_MCP_ALLOWED_GITHUB_USERS", "").split(",") if u.strip()
+    u
+    for u in os.environ.get("TMUX_MCP_ALLOWED_GITHUB_USERS", "").split(",")
+    if u.strip()
 ]
 
 _missing = [
-    name for name, val in [
+    name
+    for name, val in [
         ("TMUX_MCP_PUBLIC_URL", PUBLIC_URL),
         ("TMUX_MCP_GITHUB_CLIENT_ID", GH_CLIENT_ID),
         ("TMUX_MCP_GITHUB_CLIENT_SECRET", GH_CLIENT_SECRET),
         ("TMUX_MCP_ALLOWED_GITHUB_USERS", ",".join(ALLOWED_USERS)),
-    ] if not val
+    ]
+    if not val
 ]
 if _missing:
     raise SystemExit(
@@ -115,7 +127,9 @@ async def github_callback(request: Request) -> RedirectResponse | PlainTextRespo
 async def healthz(_: Request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _run(cmd: list[str]) -> tuple[str, str, int]:
     try:
@@ -154,19 +168,23 @@ def _resolve_session(session: str | None) -> tuple[str | None, str | None]:
         return session, None
     sessions, err = _list_tmux_sessions()
     if err is not None:
-        return None, json.dumps({
-            "error": f"tmux list-sessions failed: {err}",
-            "hint": "No tmux server running, or tmux is not installed.",
-        })
+        return None, json.dumps(
+            {
+                "error": f"tmux list-sessions failed: {err}",
+                "hint": "No tmux server running, or tmux is not installed.",
+            }
+        )
     if not sessions:
         return None, json.dumps({"error": "no tmux sessions running"})
     if len(sessions) == 1:
         return sessions[0], None
-    return None, json.dumps({
-        "error": "session argument required — multiple tmux sessions are running",
-        "available_sessions": sessions,
-        "hint": "Re-call with one of the listed sessions as the 'session' argument.",
-    })
+    return None, json.dumps(
+        {
+            "error": "session argument required — multiple tmux sessions are running",
+            "available_sessions": sessions,
+            "hint": "Re-call with one of the listed sessions as the 'session' argument.",
+        }
+    )
 
 
 def _tailscale_ip() -> str | None:
@@ -244,17 +262,22 @@ async def tmux_get_summary(
     stdout, stderr, code = _run(cmd)
 
     if code != 0:
-        return json.dumps({
-            "error": f"tmux capture-pane failed (exit {code}): {stderr.strip()}",
-            "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
-        })
+        return json.dumps(
+            {
+                "error": f"tmux capture-pane failed (exit {code}): {stderr.strip()}",
+                "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
+            }
+        )
 
     out_lines = stdout.splitlines()
-    return json.dumps({
-        "target": target,
-        "lines_captured": len(out_lines),
-        "output": stdout,
-    }, indent=2)
+    return json.dumps(
+        {
+            "target": target,
+            "lines_captured": len(out_lines),
+            "output": stdout,
+        },
+        indent=2,
+    )
 
 
 @mcp.tool(
@@ -280,7 +303,9 @@ async def tmux_send_prompt(
     pane: PaneArg = 0,
     press_enter: Annotated[
         bool,
-        Field(default=True, description="Whether to press Enter after sending the prompt"),
+        Field(
+            default=True, description="Whether to press Enter after sending the prompt"
+        ),
     ] = True,
 ) -> str:
     """Send a prompt string to a tmux pane (optionally pressing Enter)."""
@@ -292,24 +317,31 @@ async def tmux_send_prompt(
     # "Enter" or "C-c" are typed as text rather than interpreted as keys.
     _, stderr, code = _run(["tmux", "send-keys", "-t", target, "-l", prompt])
     if code != 0:
-        return json.dumps({
-            "error": f"tmux send-keys failed (exit {code}): {stderr.strip()}",
-            "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
-        })
+        return json.dumps(
+            {
+                "error": f"tmux send-keys failed (exit {code}): {stderr.strip()}",
+                "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
+            }
+        )
 
     if press_enter:
         _, stderr, code = _run(["tmux", "send-keys", "-t", target, "Enter"])
         if code != 0:
-            return json.dumps({
-                "error": f"tmux send-keys Enter failed (exit {code}): {stderr.strip()}",
-            })
+            return json.dumps(
+                {
+                    "error": f"tmux send-keys Enter failed (exit {code}): {stderr.strip()}",
+                }
+            )
 
-    return json.dumps({
-        "sent": True,
-        "target": target,
-        "prompt_preview": prompt[:120] + ("…" if len(prompt) > 120 else ""),
-        "enter_pressed": press_enter,
-    }, indent=2)
+    return json.dumps(
+        {
+            "sent": True,
+            "target": target,
+            "prompt_preview": prompt[:120] + ("…" if len(prompt) > 120 else ""),
+            "enter_pressed": press_enter,
+        },
+        indent=2,
+    )
 
 
 @mcp.tool(
@@ -324,16 +356,22 @@ async def tmux_send_prompt(
 )
 async def tmux_list_sessions() -> str:
     """List all active tmux sessions on this machine."""
-    stdout, stderr, code = _run([
-        "tmux", "list-sessions", "-F",
-        "#{session_name} (#{session_windows} windows, created #{session_created_string})",
-    ])
+    stdout, stderr, code = _run(
+        [
+            "tmux",
+            "list-sessions",
+            "-F",
+            "#{session_name} (#{session_windows} windows, created #{session_created_string})",
+        ]
+    )
 
     if code != 0:
-        return json.dumps({
-            "error": f"tmux list-sessions failed: {stderr.strip()}",
-            "hint": "No tmux server running, or tmux is not installed.",
-        })
+        return json.dumps(
+            {
+                "error": f"tmux list-sessions failed: {stderr.strip()}",
+                "hint": "No tmux server running, or tmux is not installed.",
+            }
+        )
 
     sessions = [line.strip() for line in stdout.splitlines() if line.strip()]
     return json.dumps({"sessions": sessions}, indent=2)
@@ -421,7 +459,9 @@ class ClaudeChatCompatMiddleware:
                     rewrote = _unwrap_chat_arguments(payload)
                 if rewrote:
                     body = json.dumps(payload).encode("utf-8")
-                    _compat_logger.info("repaired Claude Chat tools/call body on %s", scope.get("path"))
+                    _compat_logger.info(
+                        "repaired Claude Chat tools/call body on %s", scope.get("path")
+                    )
             except json.JSONDecodeError:
                 pass
 
@@ -470,7 +510,11 @@ class RequestDebugMiddleware:
             if msg["type"] != "http.request":
                 _debug_logger.info(
                     "→ %s %s auth=%r ct=%r body=<none:%s>",
-                    method, path, redacted_auth, ct, msg["type"],
+                    method,
+                    path,
+                    redacted_auth,
+                    ct,
+                    msg["type"],
                 )
                 pending = msg
 
@@ -491,7 +535,12 @@ class RequestDebugMiddleware:
         truncated = " …[truncated]" if len(body) > DEBUG_BODY_MAX else ""
         _debug_logger.info(
             "→ %s %s auth=%r ct=%r body=%s%s",
-            method, path, redacted_auth, ct, body_preview, truncated,
+            method,
+            path,
+            redacted_auth,
+            ct,
+            body_preview,
+            truncated,
         )
 
         sent = False
@@ -507,6 +556,7 @@ class RequestDebugMiddleware:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     import uvicorn
@@ -527,14 +577,18 @@ def main() -> None:
         logging.getLogger("tmux_mcp.compat").setLevel(logging.INFO)
         app.add_middleware(ClaudeChatCompatMiddleware)
     if DEBUG_REQUESTS:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(name)s %(message)s"
+        )
         _debug_logger.setLevel(logging.INFO)
         app.add_middleware(RequestDebugMiddleware)
         print("Request debug logging ENABLED (TMUX_MCP_DEBUG_REQUESTS=1)")
     if not CLAUDE_CHAT_COMPAT:
         print("Claude Chat compat shim DISABLED (TMUX_MCP_CLAUDE_CHAT_COMPAT=0)")
 
-    config = uvicorn.Config(app, host=host, port=PORT, log_level=mcp.settings.log_level.lower())
+    config = uvicorn.Config(
+        app, host=host, port=PORT, log_level=mcp.settings.log_level.lower()
+    )
     try:
         uvicorn.Server(config).run()
     except KeyboardInterrupt:
