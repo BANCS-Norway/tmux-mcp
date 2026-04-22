@@ -30,3 +30,6 @@ htmlcov/
 
 # Git worktrees (preferred layout: .worktrees/<branch>)
 .worktrees/
+
+# direnv
+.direnv/
