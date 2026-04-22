@@ -33,7 +33,8 @@ from pydantic import AnyHttpUrl, Field
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse
 
-from tmux_mcp.auth import GithubOAuthProvider
+from tmux_mcp.auth import STATE_DIR, GithubOAuthProvider
+from tmux_mcp.ratelimit import RateLimitMiddleware
 
 # Load .env from CWD or project root before any env reads.
 load_dotenv()
@@ -56,6 +57,10 @@ CLAUDE_CHAT_COMPAT = os.environ.get("TMUX_MCP_CLAUDE_CHAT_COMPAT", "1").lower() 
     "true",
     "yes",
 )
+RATELIMIT_WINDOW_SECONDS = float(
+    os.environ.get("TMUX_MCP_RATELIMIT_WINDOW_SECONDS", "10")
+)
+RATELIMIT_THRESHOLD = int(os.environ.get("TMUX_MCP_RATELIMIT_THRESHOLD", "10"))
 
 PUBLIC_URL = os.environ.get("TMUX_MCP_PUBLIC_URL", "").rstrip("/")
 GH_CLIENT_ID = os.environ.get("TMUX_MCP_GITHUB_CLIENT_ID", "")
@@ -585,6 +590,14 @@ def main() -> None:
         print("Request debug logging ENABLED (TMUX_MCP_DEBUG_REQUESTS=1)")
     if not CLAUDE_CHAT_COMPAT:
         print("Claude Chat compat shim DISABLED (TMUX_MCP_CLAUDE_CHAT_COMPAT=0)")
+    logging.getLogger("tmux_mcp.ratelimit").setLevel(logging.INFO)
+    app.add_middleware(
+        RateLimitMiddleware,
+        whitelist_path=STATE_DIR / "whitelist.txt",
+        banned_path=STATE_DIR / "banned.txt",
+        window_seconds=RATELIMIT_WINDOW_SECONDS,
+        threshold=RATELIMIT_THRESHOLD,
+    )
 
     config = uvicorn.Config(
         app, host=host, port=PORT, log_level=mcp.settings.log_level.lower()
