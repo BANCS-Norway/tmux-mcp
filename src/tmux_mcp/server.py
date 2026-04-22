@@ -17,6 +17,7 @@ Env vars:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -44,6 +45,8 @@ HOST_RAW = os.environ.get("TMUX_MCP_HOST", "0.0.0.0")
 DEFAULT_SESSION = os.environ.get("TMUX_MCP_SESSION") or None
 DEFAULT_LINES = 50
 SUBPROCESS_TIMEOUT = 5
+DEBUG_REQUESTS = os.environ.get("TMUX_MCP_DEBUG_REQUESTS", "").lower() in ("1", "true", "yes")
+DEBUG_BODY_MAX = 8192  # truncate logged request bodies to avoid flooding logs
 
 PUBLIC_URL = os.environ.get("TMUX_MCP_PUBLIC_URL", "").rstrip("/")
 GH_CLIENT_ID = os.environ.get("TMUX_MCP_GITHUB_CLIENT_ID", "")
@@ -144,6 +147,8 @@ def _resolve_session(session: str | None) -> tuple[str | None, str | None]:
     If not, auto-pick when exactly one session exists; otherwise return an
     error payload listing the available sessions so the caller can retry.
     """
+    if DEBUG_REQUESTS:
+        _debug_logger.info("tool received session=%r", session)
     if session:
         return session, None
     sessions, err = _list_tmux_sessions()
@@ -333,9 +338,82 @@ async def tmux_list_sessions() -> str:
     return json.dumps({"sessions": sessions}, indent=2)
 
 
+# ── Middleware ───────────────────────────────────────────────────────────────
+
+_debug_logger = logging.getLogger("tmux_mcp.debug")
+
+
+class RequestDebugMiddleware:
+    """Pure-ASGI middleware that logs incoming request bodies + key headers.
+
+    Enabled via TMUX_MCP_DEBUG_REQUESTS=1. Sensitive headers are redacted.
+    Pure ASGI (not BaseHTTPMiddleware) to avoid Starlette's body-stream
+    consumption quirks that were breaking SSE responses from FastMCP.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        auth = headers.get(b"authorization", b"").decode("latin-1")
+        redacted_auth = (auth.split(" ", 1)[0] + " <redacted>") if auth else ""
+        ct = headers.get(b"content-type", b"").decode("latin-1")
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+
+        chunks: list[bytes] = []
+        more = True
+        while more:
+            msg = await receive()
+            if msg["type"] != "http.request":
+                _debug_logger.info(
+                    "→ %s %s auth=%r ct=%r body=<none:%s>",
+                    method, path, redacted_auth, ct, msg["type"],
+                )
+                pending = msg
+
+                async def once_receive():
+                    nonlocal pending
+                    if pending is not None:
+                        out, pending = pending, None
+                        return out
+                    return await receive()
+
+                await self.app(scope, once_receive, send)
+                return
+            chunks.append(msg.get("body", b""))
+            more = msg.get("more_body", False)
+        body = b"".join(chunks)
+
+        body_preview = body[:DEBUG_BODY_MAX].decode("utf-8", errors="replace")
+        truncated = " …[truncated]" if len(body) > DEBUG_BODY_MAX else ""
+        _debug_logger.info(
+            "→ %s %s auth=%r ct=%r body=%s%s",
+            method, path, redacted_auth, ct, body_preview, truncated,
+        )
+
+        sent = False
+
+        async def replay_receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    import uvicorn
+
     host = _resolve_host(HOST_RAW)
     mcp.settings.host = host
     mcp.settings.port = PORT
@@ -343,8 +421,17 @@ def main() -> None:
     print(f"Starting tmux_mcp on {host}:{PORT} (streamable HTTP)")
     if ts_ip:
         print(f"Tailscale IP: http://{ts_ip}:{PORT}/mcp")
+
+    app = mcp.streamable_http_app()
+    if DEBUG_REQUESTS:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        _debug_logger.setLevel(logging.INFO)
+        app.add_middleware(RequestDebugMiddleware)
+        print("Request debug logging ENABLED (TMUX_MCP_DEBUG_REQUESTS=1)")
+
+    config = uvicorn.Config(app, host=host, port=PORT, log_level=mcp.settings.log_level.lower())
     try:
-        mcp.run(transport="streamable-http")
+        uvicorn.Server(config).run()
     except KeyboardInterrupt:
         print("\nShutting down.")
 
