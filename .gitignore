@@ -11,3 +11,22 @@ wheels/
 
 # Local config
 .env
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code local state
+.claude/
+
+# Git worktrees (preferred layout: .worktrees/<branch>)
+.worktrees/

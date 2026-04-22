@@ -1,5 +1,7 @@
 # tmux-mcp
 
+> Upstream: <https://github.com/BANCS-Norway/tmux-mcp>
+
 MCP server that bridges Claude Chat ↔ Claude Code by driving a `tmux` session
 on the host machine. Authenticates users via **GitHub OAuth**; the MCP server
 itself is a full OAuth 2.1 authorization server (with Dynamic Client
