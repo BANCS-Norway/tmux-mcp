@@ -125,7 +125,8 @@ def _run(cmd: list[str]) -> tuple[str, str, int]:
 
 def _tmux_target(session: str, pane: int) -> str:
     # "=" prefix forces an exact session-name match (no prefix fallback).
-    return f"={session}.{pane}"
+    # tmux target grammar is session:window.pane — ":." selects the current window.
+    return f"={session}:.{pane}"
 
 
 def _tailscale_ip() -> str | None:
