@@ -41,7 +41,7 @@ load_dotenv()
 
 PORT = int(os.environ.get("TMUX_MCP_PORT", "8747"))
 HOST_RAW = os.environ.get("TMUX_MCP_HOST", "0.0.0.0")
-DEFAULT_SESSION = os.environ.get("TMUX_MCP_SESSION", "0")
+DEFAULT_SESSION = os.environ.get("TMUX_MCP_SESSION") or None
 DEFAULT_LINES = 50
 SUBPROCESS_TIMEOUT = 5
 
@@ -129,6 +129,40 @@ def _tmux_target(session: str, pane: int) -> str:
     return f"={session}:.{pane}"
 
 
+def _list_tmux_sessions() -> tuple[list[str], str | None]:
+    """Return (session_names, error). error is non-None on tmux failure."""
+    stdout, stderr, code = _run(["tmux", "list-sessions", "-F", "#{session_name}"])
+    if code != 0:
+        return [], stderr.strip() or f"tmux list-sessions exit {code}"
+    return [line.strip() for line in stdout.splitlines() if line.strip()], None
+
+
+def _resolve_session(session: str | None) -> tuple[str | None, str | None]:
+    """Resolve a possibly-None session arg to a concrete session name.
+
+    Returns (name, error_json). If the caller supplied a name, pass it through.
+    If not, auto-pick when exactly one session exists; otherwise return an
+    error payload listing the available sessions so the caller can retry.
+    """
+    if session:
+        return session, None
+    sessions, err = _list_tmux_sessions()
+    if err is not None:
+        return None, json.dumps({
+            "error": f"tmux list-sessions failed: {err}",
+            "hint": "No tmux server running, or tmux is not installed.",
+        })
+    if not sessions:
+        return None, json.dumps({"error": "no tmux sessions running"})
+    if len(sessions) == 1:
+        return sessions[0], None
+    return None, json.dumps({
+        "error": "session argument required — multiple tmux sessions are running",
+        "available_sessions": sessions,
+        "hint": "Re-call with one of the listed sessions as the 'session' argument.",
+    })
+
+
 def _tailscale_ip() -> str | None:
     if not shutil.which("tailscale"):
         return None
@@ -156,10 +190,14 @@ def _resolve_host(raw: str) -> str:
 # schema has top-level properties (MCP clients expect this shape).
 
 SessionArg = Annotated[
-    str,
+    str | None,
     Field(
         default=DEFAULT_SESSION,
-        description="tmux session name or index (e.g. '0', 'milorg_co')",
+        description=(
+            "tmux session name (e.g. 'milorg_co'). Optional: if omitted and "
+            "exactly one session is running, it is used automatically; if "
+            "multiple sessions exist, the tool returns the list so you can retry."
+        ),
     ),
 ]
 PaneArg = Annotated[
@@ -192,14 +230,17 @@ async def tmux_get_summary(
     ] = DEFAULT_LINES,
 ) -> str:
     """Capture the last N lines from a tmux pane."""
-    target = _tmux_target(session, pane)
+    resolved, err = _resolve_session(session)
+    if err is not None:
+        return err
+    target = _tmux_target(resolved, pane)
     cmd = ["tmux", "capture-pane", "-p", "-t", target, "-S", f"-{lines}"]
     stdout, stderr, code = _run(cmd)
 
     if code != 0:
         return json.dumps({
             "error": f"tmux capture-pane failed (exit {code}): {stderr.strip()}",
-            "hint": f"Is session '{session}' running? Use tmux_list_sessions to check.",
+            "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
         })
 
     out_lines = stdout.splitlines()
@@ -237,14 +278,17 @@ async def tmux_send_prompt(
     ] = True,
 ) -> str:
     """Send a prompt string to a tmux pane (optionally pressing Enter)."""
-    target = _tmux_target(session, pane)
+    resolved, err = _resolve_session(session)
+    if err is not None:
+        return err
+    target = _tmux_target(resolved, pane)
     # -l forces literal interpretation so prompts containing words like
     # "Enter" or "C-c" are typed as text rather than interpreted as keys.
     _, stderr, code = _run(["tmux", "send-keys", "-t", target, "-l", prompt])
     if code != 0:
         return json.dumps({
             "error": f"tmux send-keys failed (exit {code}): {stderr.strip()}",
-            "hint": f"Is session '{session}' running? Use tmux_list_sessions to check.",
+            "hint": f"Is session '{resolved}' running? Use tmux_list_sessions to check.",
         })
 
     if press_enter:
