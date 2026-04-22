@@ -12,6 +12,14 @@ from pathlib import Path
 
 import pytest
 
+# Set required env vars at module import so pytest collection can safely import
+# tmux_mcp.server (which raises SystemExit on missing env). Individual tests
+# can still override via monkeypatch.setenv.
+os.environ.setdefault("TMUX_MCP_PUBLIC_URL", "https://test.example")
+os.environ.setdefault("TMUX_MCP_GITHUB_CLIENT_ID", "gh-client-id")
+os.environ.setdefault("TMUX_MCP_GITHUB_CLIENT_SECRET", "gh-client-secret")
+os.environ.setdefault("TMUX_MCP_ALLOWED_GITHUB_USERS", "alice,bob")
+
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
