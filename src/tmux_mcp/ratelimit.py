@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Iterable
@@ -73,12 +74,14 @@ class RateLimitMiddleware:
         *,
         whitelist_path: Path,
         banned_path: Path,
+        pending_log_dir: Path | None = None,
         window_seconds: float = 10.0,
         threshold: int = 10,
     ):
         self.app = app
         self.whitelist_path = whitelist_path
         self.banned_path = banned_path
+        self.pending_log_dir = pending_log_dir
         self.window_seconds = window_seconds
         self.threshold = threshold
 
@@ -88,11 +91,12 @@ class RateLimitMiddleware:
         self._lock = Lock()
 
         logger.info(
-            "rate-limit loaded: whitelist=%d banned=%d window=%.1fs threshold=%d",
+            "rate-limit loaded: whitelist=%d banned=%d window=%.1fs threshold=%d log_dir=%s",
             len(self._whitelist),
             len(self._banned),
             window_seconds,
             threshold,
+            pending_log_dir or "<off>",
         )
 
     # ── Public hooks (used by tests) ────────────────────────────────────────
@@ -120,6 +124,7 @@ class RateLimitMiddleware:
             return
 
         if ip in self._banned:
+            self._log_pending(ip, scope)
             await self._send_forbidden(send)
             return
 
@@ -143,6 +148,11 @@ class RateLimitMiddleware:
 
         if status == 404:
             self._ban(ip, reason="404")
+            return
+
+        if status == 429:
+            # Inner app emitted 429 independently of the middleware reject path.
+            self._log_pending(ip, scope)
             return
 
         if status in (401, 403):
@@ -185,6 +195,26 @@ class RateLimitMiddleware:
                 should_ban = True
         if should_ban:
             self._ban(ip, reason=f"auth-fail>{self.threshold}/{self.window_seconds}s")
+
+    # ── Pending-log write (best-effort) ─────────────────────────────────────
+
+    def _log_pending(self, ip: str, scope: dict) -> None:
+        if self.pending_log_dir is None:
+            return
+        try:
+            self.pending_log_dir.mkdir(parents=True, exist_ok=True)
+            # Colons in IPv6 addresses are legal in filenames on Linux/macOS
+            # but ugly — normalize so `2001:db8::1` → `2001_db8__1.log`.
+            safe_ip = ip.replace(":", "_")
+            path = self.pending_log_dir / f"{safe_ip}.log"
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            method = scope.get("method", "?")
+            req_path = scope.get("path", "?")
+            line = f"{ts} {ip} {method} {req_path} 429\n"
+            with path.open("a") as f:
+                f.write(line)
+        except OSError as e:
+            logger.warning("pending-log write failed for ip=%s: %s", ip, e)
 
     # ── Reject path ─────────────────────────────────────────────────────────
 

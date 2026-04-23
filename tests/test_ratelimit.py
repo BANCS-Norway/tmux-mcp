@@ -58,6 +58,11 @@ def paths(tmp_path: Path) -> tuple[Path, Path]:
     return tmp_path / "whitelist.txt", tmp_path / "banned.txt"
 
 
+@pytest.fixture
+def pending_dir(tmp_path: Path) -> Path:
+    return tmp_path / "logs" / "pending"
+
+
 def test_404_bans_instantly(paths):
     wl, bl = paths
     mw = RateLimitMiddleware(
@@ -158,3 +163,122 @@ def test_startup_loads_existing_files(paths):
     mw = RateLimitMiddleware(make_inner(200), whitelist_path=wl, banned_path=bl)
     assert mw.whitelist() == frozenset({"1.1.1.1", "2.2.2.2"})
     assert mw.banned() == frozenset({"6.6.6.6"})
+
+
+# ── Pending-log (abuse pipeline Part 1) ─────────────────────────────────────
+
+
+def test_banned_ip_request_is_logged_to_pending(paths, pending_dir):
+    wl, bl = paths
+    bl.write_text("9.9.9.9\n")
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("9.9.9.9", path="/auth.js")))
+    log = (pending_dir / "9.9.9.9.log").read_text()
+    assert "9.9.9.9 GET /auth.js 429" in log
+
+
+def test_multiple_banned_requests_append(paths, pending_dir):
+    wl, bl = paths
+    bl.write_text("9.9.9.9\n")
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("9.9.9.9", path="/robots.txt")))
+    asyncio.run(drive(mw, make_scope("9.9.9.9", path="/bot-connect.js")))
+    lines = (pending_dir / "9.9.9.9.log").read_text().splitlines()
+    assert len(lines) == 2
+    assert "/robots.txt" in lines[0]
+    assert "/bot-connect.js" in lines[1]
+
+
+def test_inner_app_429_is_also_logged(paths, pending_dir):
+    wl, bl = paths
+    mw = RateLimitMiddleware(
+        make_inner(429),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("7.7.7.7", path="/some/path")))
+    log = (pending_dir / "7.7.7.7.log").read_text()
+    assert "7.7.7.7 GET /some/path 429" in log
+
+
+def test_whitelisted_ip_is_never_logged(paths, pending_dir):
+    wl, bl = paths
+    wl.write_text("5.5.5.5\n")
+    mw = RateLimitMiddleware(
+        make_inner(429),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("5.5.5.5")))
+    assert not pending_dir.exists() or not any(pending_dir.iterdir())
+
+
+def test_pending_dir_autocreated(paths, pending_dir):
+    wl, bl = paths
+    bl.write_text("9.9.9.9\n")
+    assert not pending_dir.exists()
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("9.9.9.9")))
+    assert pending_dir.is_dir()
+    assert (pending_dir / "9.9.9.9.log").exists()
+
+
+def test_logging_disabled_when_no_dir(paths, tmp_path):
+    wl, bl = paths
+    bl.write_text("9.9.9.9\n")
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=None,
+    )
+    asyncio.run(drive(mw, make_scope("9.9.9.9")))
+    # No log dir provided, no files created anywhere.
+    assert not any(tmp_path.glob("**/*.log"))
+
+
+def test_ipv6_colons_normalized_in_filename(paths, pending_dir):
+    wl, bl = paths
+    bl.write_text("2001:db8::1\n")
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=pending_dir,
+    )
+    asyncio.run(drive(mw, make_scope("2001:db8::1")))
+    assert (pending_dir / "2001_db8__1.log").exists()
+
+
+def test_log_write_failure_does_not_break_request(paths, tmp_path, caplog):
+    wl, bl = paths
+    bl.write_text("9.9.9.9\n")
+    # Point log dir at an existing file so mkdir will fail.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    mw = RateLimitMiddleware(
+        make_inner(200),
+        whitelist_path=wl,
+        banned_path=bl,
+        pending_log_dir=blocker / "pending",
+    )
+    received = asyncio.run(drive(mw, make_scope("9.9.9.9")))
+    # Request still completes with 429 reject.
+    assert received[0]["status"] == 429

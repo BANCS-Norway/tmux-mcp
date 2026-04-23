@@ -21,6 +21,7 @@ import logging
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
@@ -61,6 +62,7 @@ RATELIMIT_WINDOW_SECONDS = float(
     os.environ.get("TMUX_MCP_RATELIMIT_WINDOW_SECONDS", "10")
 )
 RATELIMIT_THRESHOLD = int(os.environ.get("TMUX_MCP_RATELIMIT_THRESHOLD", "10"))
+LOG_DIR = os.environ.get("TMUX_MCP_LOG_DIR", "./logs")
 
 PUBLIC_URL = os.environ.get("TMUX_MCP_PUBLIC_URL", "").rstrip("/")
 GH_CLIENT_ID = os.environ.get("TMUX_MCP_GITHUB_CLIENT_ID", "")
@@ -595,6 +597,7 @@ def main() -> None:
         RateLimitMiddleware,
         whitelist_path=STATE_DIR / "whitelist.txt",
         banned_path=STATE_DIR / "banned.txt",
+        pending_log_dir=Path(LOG_DIR).expanduser() / "pending",
         window_seconds=RATELIMIT_WINDOW_SECONDS,
         threshold=RATELIMIT_THRESHOLD,
     )
