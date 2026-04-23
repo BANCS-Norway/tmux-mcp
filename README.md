@@ -106,6 +106,10 @@ just re-auth, which is quick since GitHub remembers the authorization.
 └── jwt-key.pem    # RSA private key for signing access tokens (mode 600)
 ```
 
+## Shell integrations
+
+Optional shell helpers that pair well with `tmux-mcp` — e.g. `repo-tmux` for auto-attaching to a per-repo tmux session when you open a terminal. See [`tools/shells/`](tools/shells/).
+
 ## Development
 
 ```sh
