@@ -36,6 +36,7 @@ from starlette.responses import PlainTextResponse, RedirectResponse
 
 from tmux_mcp.auth import STATE_DIR, GithubOAuthProvider
 from tmux_mcp.ratelimit import RateLimitMiddleware
+from tmux_mcp import reports as _reports
 
 # Load .env from CWD or project root before any env reads.
 load_dotenv()
@@ -382,6 +383,119 @@ async def tmux_list_sessions() -> str:
 
     sessions = [line.strip() for line in stdout.splitlines() if line.strip()]
     return json.dumps({"sessions": sessions}, indent=2)
+
+
+# ── Abuse-pipeline tools ─────────────────────────────────────────────────────
+
+PeriodArg = Annotated[
+    str | None,
+    Field(
+        default=None,
+        description=(
+            "Optional time filter: 'last_day', 'last_week', or 'since:YYYY-MM-DD'. "
+            "Omit for all."
+        ),
+    ),
+]
+
+
+def _log_root() -> "Path":
+    return Path(LOG_DIR).expanduser()
+
+
+@mcp.tool(
+    name="abuse_get_pending",
+    annotations={
+        "title": "List Pending Abuse Logs",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def abuse_get_pending(period: PeriodArg = None) -> str:
+    """List IPs currently accumulating 429 responses in pending/.
+
+    Returns a plain-text summary with entry count and last-seen per IP.
+    """
+    try:
+        return _reports.get_pending(_log_root(), period)
+    except ValueError as e:
+        return f"Invalid period: {e}"
+
+
+@mcp.tool(
+    name="abuse_get_staged",
+    annotations={
+        "title": "List Staged Abuse Reports",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def abuse_get_staged(period: PeriodArg = None) -> str:
+    """List enriched abuse reports in staged/ (ready to submit)."""
+    try:
+        return _reports.get_staged(_log_root(), period)
+    except ValueError as e:
+        return f"Invalid period: {e}"
+
+
+@mcp.tool(
+    name="abuse_list_reported",
+    annotations={
+        "title": "List Submitted Abuse Reports",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def abuse_list_reported(
+    period: Annotated[
+        str,
+        Field(
+            description=(
+                "Required time filter: 'last_day', 'last_week', or 'since:YYYY-MM-DD'."
+            ),
+        ),
+    ],
+) -> str:
+    """List archived submissions in reported/ (filter required — archive grows)."""
+    try:
+        return _reports.list_reported(_log_root(), period)
+    except ValueError as e:
+        return f"Invalid period: {e}"
+
+
+@mcp.tool(
+    name="abuse_send_report",
+    annotations={
+        "title": "Submit Abuse Report",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def abuse_send_report(
+    filename: Annotated[
+        str,
+        Field(
+            description="Bare filename from staged/ or pending/ (e.g. '1.2.3.4.log')."
+        ),
+    ],
+) -> str:
+    """Submit an abuse report to AbuseIPDB and archive the file.
+
+    Accepts a filename from staged/ or pending/; pending files are enriched
+    inline before submission. On success, moves the file to
+    reported/{ip}-{timestamp}.log. On any failure, leaves the file in place
+    so the submission can be retried.
+    """
+    api_key = os.environ.get("TMUX_MCP_ABUSEIPDB_KEY", "")
+    return await _reports.send_report(_log_root(), filename, api_key or None)
 
 
 # ── Middleware ───────────────────────────────────────────────────────────────

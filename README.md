@@ -9,11 +9,17 @@ Registration), so it works as a remote connector in the Claude mobile app.
 
 ## Tools
 
-| Tool                 | What it does                                        |
-| -------------------- | --------------------------------------------------- |
-| `tmux_list_sessions` | List active tmux sessions on the host               |
-| `tmux_get_summary`   | Capture the last N lines from a tmux pane           |
-| `tmux_send_prompt`   | Send a prompt string to a tmux pane (optional Enter)|
+| Tool                  | What it does                                                  |
+| --------------------- | ------------------------------------------------------------- |
+| `tmux_list_sessions`  | List active tmux sessions on the host                         |
+| `tmux_get_summary`    | Capture the last N lines from a tmux pane                     |
+| `tmux_send_prompt`    | Send a prompt string to a tmux pane (optional Enter)          |
+| `abuse_get_pending`   | List IPs still accumulating 429 responses in `pending/`       |
+| `abuse_get_staged`    | List enriched abuse reports in `staged/` (ready to submit)    |
+| `abuse_list_reported` | List archived submissions in `reported/` (period required)    |
+| `abuse_send_report`   | Submit an abuse report to AbuseIPDB and archive the file      |
+
+The `abuse_*` tools pair with the [optional abuse reporting pipeline](#abuse-reporting-pipeline-optional) below. `abuse_send_report` requires `TMUX_MCP_ABUSEIPDB_KEY`; the others work with just the log directory.
 
 ## Setup
 
@@ -106,15 +112,36 @@ just re-auth, which is quick since GitHub remembers the authorization.
 └── jwt-key.pem    # RSA private key for signing access tokens (mode 600)
 ```
 
-## Abuse-report enricher (optional)
+## Abuse reporting pipeline (optional)
 
-A separate process watches `{TMUX_MCP_LOG_DIR:-./logs}/pending/` for rate-limited-IP logs, enriches each file (ASN + country via RIPE Stat, AbuseIPDB category heuristics), and moves it to `staged/` once the file has been idle for 60 seconds. Run it alongside the server if you want to collect data for abuse reports:
+A three-part pipeline for collecting malicious IP activity and submitting reports to [AbuseIPDB](https://www.abuseipdb.com/):
 
-```sh
-uv run tmux-mcp-enricher
-```
+1. **Collector** — the rate-limit middleware writes every 429 to `{TMUX_MCP_LOG_DIR:-./logs}/pending/{ip}.log` (built into the server, always on).
+2. **Enricher** — a separate process watches `pending/`, debounces (60s quiet window), looks up ASN + country via RIPE Stat, detects AbuseIPDB categories, and moves files to `staged/`. Run alongside the server:
 
-Runs independently of the main server — restart either without affecting the other. RIPE lookup failures are treated as non-fatal; enrichment proceeds with `unknown` fields. Planned Part 3 (upstream `send_report` MCP tool) will consume `staged/` and submit to AbuseIPDB.
+   ```sh
+   uv run tmux-mcp-enricher
+   ```
+
+   Runs independently — restart either without affecting the other. RIPE lookup failures are non-fatal; enrichment proceeds with `unknown` fields.
+3. **MCP tools** — `abuse_get_pending`, `abuse_get_staged`, `abuse_list_reported`, `abuse_send_report`. Use them from the agent to inspect the pipeline and submit reports.
+
+### Getting an AbuseIPDB API key
+
+`abuse_send_report` requires a free AbuseIPDB account:
+
+1. Sign up at [abuseipdb.com/register](https://www.abuseipdb.com/register).
+2. Verify your email.
+3. Go to [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api) and click **Create Key**. The free tier allows up to 1,000 submissions per day — plenty for a single-host deployment.
+4. Add the key to `.env`:
+
+   ```sh
+   TMUX_MCP_ABUSEIPDB_KEY=your-key-here
+   ```
+
+5. Restart the server (`uv run tmux-mcp`) so it picks up the new env var.
+
+Without the key, `abuse_send_report` returns a clear error instead of attempting the call — the collector and enricher run fine without it, so you can start gathering data before deciding whether to submit.
 
 ## Shell integrations
 
