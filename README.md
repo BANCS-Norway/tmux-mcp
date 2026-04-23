@@ -106,6 +106,16 @@ just re-auth, which is quick since GitHub remembers the authorization.
 └── jwt-key.pem    # RSA private key for signing access tokens (mode 600)
 ```
 
+## Abuse-report enricher (optional)
+
+A separate process watches `{TMUX_MCP_LOG_DIR:-./logs}/pending/` for rate-limited-IP logs, enriches each file (ASN + country via RIPE Stat, AbuseIPDB category heuristics), and moves it to `staged/` once the file has been idle for 60 seconds. Run it alongside the server if you want to collect data for abuse reports:
+
+```sh
+uv run tmux-mcp-enricher
+```
+
+Runs independently of the main server — restart either without affecting the other. RIPE lookup failures are treated as non-fatal; enrichment proceeds with `unknown` fields. Planned Part 3 (upstream `send_report` MCP tool) will consume `staged/` and submit to AbuseIPDB.
+
 ## Shell integrations
 
 Optional shell helpers that pair well with `tmux-mcp` — e.g. `repo-tmux` for auto-attaching to a per-repo tmux session when you open a terminal. See [`tools/shells/`](tools/shells/).

@@ -593,11 +593,12 @@ def main() -> None:
     if not CLAUDE_CHAT_COMPAT:
         print("Claude Chat compat shim DISABLED (TMUX_MCP_CLAUDE_CHAT_COMPAT=0)")
     logging.getLogger("tmux_mcp.ratelimit").setLevel(logging.INFO)
+    log_root = Path(LOG_DIR).expanduser()
     app.add_middleware(
         RateLimitMiddleware,
         whitelist_path=STATE_DIR / "whitelist.txt",
         banned_path=STATE_DIR / "banned.txt",
-        pending_log_dir=Path(LOG_DIR).expanduser() / "pending",
+        pending_log_dir=log_root / "pending",
         window_seconds=RATELIMIT_WINDOW_SECONDS,
         threshold=RATELIMIT_THRESHOLD,
     )

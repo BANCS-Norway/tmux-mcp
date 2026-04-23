@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 tmux-mcp = "tmux_mcp:main"
+tmux-mcp-enricher = "tmux_mcp.enricher:main"
 
 [dependency-groups]
 dev = [
