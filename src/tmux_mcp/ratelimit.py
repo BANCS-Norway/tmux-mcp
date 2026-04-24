@@ -34,6 +34,21 @@ from typing import Iterable
 logger = logging.getLogger("tmux_mcp.ratelimit")
 
 
+# Paths that normal browsers and well-behaved crawlers request unprompted.
+# A 404 here is noise, not a scanner signal — don't escalate to a ban.
+_BENIGN_404_PATHS: frozenset[str] = frozenset(
+    {
+        "/",
+        "/favicon.ico",
+        "/robots.txt",
+        "/sitemap.xml",
+        "/rss.xml",
+        "/atom.xml",
+        "/feed.xml",
+    }
+)
+
+
 def _load_ip_file(path: Path) -> set[str]:
     if not path.exists():
         return set()
@@ -147,6 +162,8 @@ class RateLimitMiddleware:
             return
 
         if status == 404:
+            if scope.get("path") in _BENIGN_404_PATHS:
+                return
             self._ban(ip, reason="404")
             return
 
