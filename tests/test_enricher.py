@@ -132,11 +132,12 @@ def test_categories_can_combine():
 
 
 @pytest.fixture
-def pending_and_staged(tmp_path: Path) -> tuple[Path, Path]:
+def pending_and_staged(tmp_path: Path) -> tuple[Path, Path, Path]:
     pending = tmp_path / "pending"
     staged = tmp_path / "staged"
+    saved = tmp_path / "saved"
     pending.mkdir()
-    return pending, staged
+    return pending, staged, saved
 
 
 def _write_pending(pending: Path, ip: str, lines: list[str]) -> Path:
@@ -146,7 +147,7 @@ def _write_pending(pending: Path, ip: str, lines: list[str]) -> Path:
 
 
 def test_promote_file_writes_staged_and_removes_pending(pending_and_staged):
-    pending, staged = pending_and_staged
+    pending, staged, saved = pending_and_staged
     file = _write_pending(
         pending,
         "155.2.225.177",
@@ -159,7 +160,7 @@ def test_promote_file_writes_staged_and_removes_pending(pending_and_staged):
 
     client = AsyncMock()
     client.get = AsyncMock(side_effect=Exception("ripe offline"))
-    result = asyncio.run(promote_file(file, staged, client))
+    result = asyncio.run(promote_file(file, staged, saved, client))
 
     assert result is not None
     assert not file.exists()
@@ -178,7 +179,7 @@ def test_promote_file_writes_staged_and_removes_pending(pending_and_staged):
 
 
 def test_promote_file_with_ripe_lookup_populates_asn_country(pending_and_staged):
-    pending, staged = pending_and_staged
+    pending, staged, saved = pending_and_staged
     file = _write_pending(
         pending,
         "155.2.225.177",
@@ -200,7 +201,7 @@ def test_promote_file_with_ripe_lookup_populates_asn_country(pending_and_staged)
     client = AsyncMock()
     client.get = AsyncMock(side_effect=fake_get)
 
-    result = asyncio.run(promote_file(file, staged, client))
+    result = asyncio.run(promote_file(file, staged, saved, client))
     content = result.read_text()
     assert "ASN: AS8758 (Iway AG)" in content
     assert "Country: CH" in content
@@ -209,23 +210,128 @@ def test_promote_file_with_ripe_lookup_populates_asn_country(pending_and_staged)
 
 
 def test_promote_file_empty_is_skipped(pending_and_staged):
-    pending, staged = pending_and_staged
+    pending, staged, saved = pending_and_staged
     file = pending / "1.2.3.4.log"
     file.write_text("\n\n\n")  # no valid lines
     client = AsyncMock()
     client.get = AsyncMock()
-    result = asyncio.run(promote_file(file, staged, client))
+    result = asyncio.run(promote_file(file, staged, saved, client))
     assert result is None
     assert not file.exists()
+
+
+def test_promote_file_uncategorized_routes_to_saved(pending_and_staged):
+    pending, staged, saved = pending_and_staged
+    file = _write_pending(
+        pending, "1.2.3.4", ["2026-04-25T12:00:00Z 1.2.3.4 GET / 429"]
+    )
+
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=Exception("offline"))
+    result = asyncio.run(promote_file(file, staged, saved, client))
+
+    assert result is not None
+    assert result.parent == saved
+    assert not file.exists()
+    assert not staged.exists() or not any(staged.iterdir())
+    content = result.read_text()
+    assert "AbuseIPDB-Categories: none" in content
+    assert "RequestCount: 1" in content
+
+
+def test_promote_file_merges_into_existing_saved(pending_and_staged):
+    pending, staged, saved = pending_and_staged
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=Exception("offline"))
+
+    # First uncategorized hit lands in saved/.
+    file1 = _write_pending(
+        pending, "1.2.3.4", ["2026-04-25T12:00:00Z 1.2.3.4 GET / 429"]
+    )
+    asyncio.run(promote_file(file1, staged, saved, client))
+
+    # Second uncategorized hit merges in.
+    file2 = _write_pending(
+        pending, "1.2.3.4", ["2026-04-25T12:01:00Z 1.2.3.4 GET / 429"]
+    )
+    result = asyncio.run(promote_file(file2, staged, saved, client))
+
+    assert result.parent == saved
+    content = result.read_text()
+    assert "RequestCount: 2" in content
+    assert "FirstSeen: 2026-04-25T12:00:00Z" in content
+    assert "LastSeen: 2026-04-25T12:01:00Z" in content
+    assert content.count("GET / 429") == 2
+
+
+def test_promote_file_promotes_saved_when_merged_set_qualifies(pending_and_staged):
+    pending, staged, saved = pending_and_staged
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=Exception("offline"))
+
+    # Two uncategorized hits → saved/.
+    f = _write_pending(pending, "1.2.3.4", ["2026-04-25T12:00:00Z 1.2.3.4 GET / 429"])
+    asyncio.run(promote_file(f, staged, saved, client))
+    f = _write_pending(pending, "1.2.3.4", ["2026-04-25T12:01:00Z 1.2.3.4 GET / 429"])
+    asyncio.run(promote_file(f, staged, saved, client))
+
+    # Web-attack probe → should promote merged set to staged/.
+    f = _write_pending(
+        pending, "1.2.3.4", ["2026-04-25T12:02:00Z 1.2.3.4 GET /.env 404"]
+    )
+    result = asyncio.run(promote_file(f, staged, saved, client))
+
+    assert result.parent == staged
+    assert not (saved / "1.2.3.4.log").exists()
+    content = result.read_text()
+    assert "RequestCount: 3" in content
+    assert "AbuseIPDB-Categories: 19" in content
+
+
+def test_promote_file_preserves_existing_ripe_when_lookup_fails(pending_and_staged):
+    pending, staged, saved = pending_and_staged
+    saved.mkdir()
+
+    # Pre-existing saved file with good ASN/Country.
+    (saved / "1.2.3.4.log").write_text(
+        "IP: 1.2.3.4\n"
+        "ASN: AS64500 (TestNet)\n"
+        "Country: DE\n"
+        "RIR: RIPE NCC\n"
+        "ReportTo: AbuseIPDB, RIPE NCC\n"
+        "AbuseIPDB-Categories: none\n"
+        "FirstSeen: 2026-04-25T12:00:00Z\n"
+        "LastSeen: 2026-04-25T12:00:00Z\n"
+        "RequestCount: 1\n"
+        "\n"
+        "Requests:\n"
+        "2026-04-25T12:00:00Z GET / 429\n"
+    )
+
+    file = _write_pending(
+        pending, "1.2.3.4", ["2026-04-25T12:01:00Z 1.2.3.4 GET / 429"]
+    )
+
+    # RIPE returns nothing this time.
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=Exception("offline"))
+    result = asyncio.run(promote_file(file, staged, saved, client))
+
+    content = result.read_text()
+    assert "ASN: AS64500 (TestNet)" in content
+    assert "Country: DE" in content
+    assert "RIR: RIPE NCC" in content
 
 
 # ── Watcher loop ────────────────────────────────────────────────────────────
 
 
 def test_watcher_promotes_quiet_file(pending_and_staged):
-    pending, staged = pending_and_staged
+    pending, staged, saved = pending_and_staged
     file = _write_pending(
-        pending, "9.9.9.9", ["2026-04-23T14:07:37Z 9.9.9.9 GET /a 429"]
+        pending,
+        "9.9.9.9",
+        ["2026-04-23T14:07:37Z 9.9.9.9 GET /wp-login.php 429"],
     )
     # Force mtime to be old enough.
     old = file.stat().st_mtime - 3600
@@ -239,6 +345,7 @@ def test_watcher_promotes_quiet_file(pending_and_staged):
             run_watcher(
                 pending,
                 staged,
+                saved,
                 quiet_seconds=60.0,
                 tick_seconds=0.01,
                 client=client,
@@ -257,7 +364,7 @@ def test_watcher_promotes_quiet_file(pending_and_staged):
 
 
 def test_watcher_leaves_recent_file_alone(pending_and_staged):
-    pending, staged = pending_and_staged
+    pending, staged, saved = pending_and_staged
     file = _write_pending(
         pending, "9.9.9.9", ["2026-04-23T14:07:37Z 9.9.9.9 GET /a 429"]
     )
@@ -271,6 +378,7 @@ def test_watcher_leaves_recent_file_alone(pending_and_staged):
             run_watcher(
                 pending,
                 staged,
+                saved,
                 quiet_seconds=60.0,
                 tick_seconds=0.01,
                 client=client,
@@ -286,6 +394,7 @@ def test_watcher_leaves_recent_file_alone(pending_and_staged):
     asyncio.run(run_briefly())
     assert file.exists()
     assert not staged.exists() or not any(staged.iterdir())
+    assert not saved.exists() or not any(saved.iterdir())
 
 
 def test_watcher_handles_missing_pending_dir(tmp_path):
@@ -297,6 +406,7 @@ def test_watcher_handles_missing_pending_dir(tmp_path):
             run_watcher(
                 tmp_path / "pending-does-not-exist",
                 tmp_path / "staged",
+                tmp_path / "saved",
                 quiet_seconds=60.0,
                 tick_seconds=0.01,
                 client=client,

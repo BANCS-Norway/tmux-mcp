@@ -281,9 +281,16 @@ async def send_report(
             source = staged
         elif pending.exists():
             # Inline enrichment before submission.
-            promoted = await promote_file(pending, log_root / "staged", client)
+            promoted = await promote_file(
+                pending, log_root / "staged", log_root / "saved", client
+            )
             if promoted is None:
                 return f"File '{filename}' is empty or malformed."
+            if promoted.parent.name != "staged":
+                return (
+                    f"File '{filename}' enriched to {promoted.parent.name}/ — "
+                    "no AbuseIPDB categories detected, cannot submit."
+                )
             source = promoted
         else:
             return (

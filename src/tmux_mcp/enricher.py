@@ -1,4 +1,4 @@
-"""Abuse pipeline — watches ``pending/``, debounces, enriches, moves to ``staged/``.
+"""Abuse pipeline — watches ``pending/``, debounces, enriches, files to ``staged/`` or ``saved/``.
 
 When a per-IP file under ``pending/`` has been quiet for ``quiet_seconds``
 (default 60s), enrich it with:
@@ -9,8 +9,14 @@ When a per-IP file under ``pending/`` has been quiet for ``quiet_seconds``
 - **AbuseIPDB categories** (heuristic on request paths)
 - **FirstSeen / LastSeen / RequestCount**
 
-and move it to ``staged/``. If any RIPE lookup fails, the corresponding field
-is left as ``unknown`` — enrichment never blocks the pipeline.
+If categorization produces at least one AbuseIPDB category, the file is
+filed under ``staged/`` (submittable). Otherwise it goes to ``saved/`` —
+evidence we don't want to lose but can't yet report. On subsequent runs,
+new requests for the same IP merge into the existing ``saved/`` file; if
+the merged set later qualifies, it is promoted to ``staged/``.
+
+If any RIPE lookup fails, the corresponding field is left as ``unknown`` —
+enrichment never blocks the pipeline.
 
 The watcher is a pure poll loop (5s tick). No ``watchdog`` dependency, no
 inotify — keeps the code portable and testable.
@@ -103,6 +109,11 @@ _COUNTRY_TO_RIR: dict[str, str] = {
 
 _LINE_RE = re.compile(
     r"^(?P<ts>\S+)\s+(?P<ip>\S+)\s+(?P<method>\S+)\s+(?P<path>\S+)\s+(?P<status>\d+)$"
+)
+
+# Body lines in staged/saved files omit the IP (it's in the header).
+_BODY_LINE_RE = re.compile(
+    r"^(?P<ts>\S+)\s+(?P<method>\S+)\s+(?P<path>\S+)\s+(?P<status>\d+)$"
 )
 
 
@@ -199,18 +210,81 @@ async def _ripe_lookup(client: httpx.AsyncClient, ip: str) -> dict:
     return out
 
 
+# ── Saved-file parsing (for cross-run accumulation) ─────────────────────────
+
+
+def _load_saved_file(path: Path) -> tuple[dict, list[dict]] | None:
+    """Parse an existing saved/staged file. Returns (header_fields, requests)
+    or ``None`` if the file is missing or malformed.
+    """
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text()
+    except OSError as e:
+        logger.warning("cannot read saved file %s: %s", path, e)
+        return None
+    if "\nRequests:\n" not in text:
+        return None
+    header_text, body_text = text.split("\nRequests:\n", 1)
+    fields: dict[str, str] = {}
+    for ln in header_text.splitlines():
+        if ":" in ln:
+            k, v = ln.split(":", 1)
+            fields[k.strip()] = v.strip()
+    requests: list[dict] = []
+    for ln in body_text.splitlines():
+        m = _BODY_LINE_RE.match(ln.strip())
+        if m:
+            requests.append(m.groupdict())
+    return fields, requests
+
+
+def _format_report_text(
+    ip: str,
+    asn_field: str,
+    country: str,
+    rir: str,
+    cats: list[int],
+    requests: list[dict],
+) -> str:
+    header = (
+        f"IP: {ip}\n"
+        f"ASN: {asn_field}\n"
+        f"Country: {country}\n"
+        f"RIR: {rir}\n"
+        f"ReportTo: {report_to(rir)}\n"
+        f"AbuseIPDB-Categories: {','.join(str(c) for c in cats) or 'none'}\n"
+        f"FirstSeen: {requests[0]['ts']}\n"
+        f"LastSeen: {requests[-1]['ts']}\n"
+        f"RequestCount: {len(requests)}\n"
+        f"\n"
+        f"Requests:\n"
+    )
+    body = "\n".join(
+        f"{r['ts']} {r['method']} {r['path']} {r['status']}" for r in requests
+    )
+    return header + body + "\n"
+
+
 # ── Promote one pending file ────────────────────────────────────────────────
 
 
 async def promote_file(
     pending_path: Path,
     staged_dir: Path,
+    saved_dir: Path,
     client: httpx.AsyncClient,
 ) -> Path | None:
-    """Read a pending file, enrich it, write the staged file, delete pending.
+    """Read a pending file, enrich it, file it under ``staged/`` (categorized)
+    or ``saved/`` (uncategorized), and delete the pending file.
 
-    Returns the staged path on success, ``None`` if the file is empty or
-    malformed.
+    Uncategorized requests merge into any existing ``saved/{ip}.log``. If the
+    merged set later qualifies, the file is promoted to ``staged/`` and the
+    saved entry is removed.
+
+    Returns the destination path on success, ``None`` if the pending file is
+    empty or malformed.
     """
     try:
         lines = [ln for ln in pending_path.read_text().splitlines() if ln.strip()]
@@ -218,7 +292,7 @@ async def promote_file(
         logger.warning("cannot read pending file %s: %s", pending_path, e)
         return None
 
-    requests: list[dict] = []
+    new_requests: list[dict] = []
     ip: str | None = None
     for ln in lines:
         parsed = parse_log_line(ln)
@@ -226,9 +300,9 @@ async def promote_file(
             continue
         if ip is None:
             ip = parsed["ip"]
-        requests.append(parsed)
+        new_requests.append(parsed)
 
-    if not requests or ip is None:
+    if not new_requests or ip is None:
         logger.info("skipping empty or malformed pending file: %s", pending_path)
         pending_path.unlink(missing_ok=True)
         return None
@@ -238,39 +312,57 @@ async def promote_file(
     holder = ripe.get("asn_holder")
     asn_field = f"{asn} ({holder})" if holder else asn
     country = ripe.get("country", "unknown")
-    rir = rir_for_country(ripe.get("country"))
-    cats = detect_categories(requests)
-    first_seen = requests[0]["ts"]
-    last_seen = requests[-1]["ts"]
 
-    staged_dir.mkdir(parents=True, exist_ok=True)
-    staged_path = staged_dir / pending_path.name
-    header = (
-        f"IP: {ip}\n"
-        f"ASN: {asn_field}\n"
-        f"Country: {country}\n"
-        f"RIR: {rir}\n"
-        f"ReportTo: {report_to(rir)}\n"
-        f"AbuseIPDB-Categories: {','.join(str(c) for c in cats) or 'none'}\n"
-        f"FirstSeen: {first_seen}\n"
-        f"LastSeen: {last_seen}\n"
-        f"RequestCount: {len(requests)}\n"
-        f"\n"
-        f"Requests:\n"
+    # Merge with any existing saved file for this IP. Preserve previously
+    # resolved RIPE fields if the current lookup came back as "unknown" —
+    # avoids regressing good metadata when RIPE is flaky.
+    saved_path = saved_dir / pending_path.name
+    existing = _load_saved_file(saved_path)
+    if existing:
+        existing_fields, existing_requests = existing
+        if asn == "unknown" and existing_fields.get("ASN", "unknown") != "unknown":
+            asn_field = existing_fields["ASN"]
+        if (
+            country == "unknown"
+            and existing_fields.get("Country", "unknown") != "unknown"
+        ):
+            country = existing_fields["Country"]
+        all_requests = existing_requests + new_requests
+    else:
+        all_requests = new_requests
+
+    rir = rir_for_country(country if country != "unknown" else None)
+    cats = detect_categories(all_requests)
+
+    if cats:
+        target_dir = staged_dir
+        bucket = "staged"
+    else:
+        target_dir = saved_dir
+        bucket = "saved"
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / pending_path.name
+    target_path.write_text(
+        _format_report_text(ip, asn_field, country, rir, cats, all_requests)
     )
-    body = "\n".join(
-        f"{r['ts']} {r['method']} {r['path']} {r['status']}" for r in requests
-    )
-    staged_path.write_text(header + body + "\n")
+
+    # Remove a stale saved entry if the merged file is now categorized and
+    # has been promoted out of saved/.
+    if existing and bucket == "staged":
+        saved_path.unlink(missing_ok=True)
+
     pending_path.unlink(missing_ok=True)
     logger.info(
-        "staged %s ip=%s requests=%d categories=%s",
-        staged_path.name,
+        "%s %s ip=%s requests=%d categories=%s%s",
+        bucket,
+        target_path.name,
         ip,
-        len(requests),
+        len(all_requests),
         cats,
+        " (merged from saved/)" if existing else "",
     )
-    return staged_path
+    return target_path
 
 
 # ── Watcher loop ────────────────────────────────────────────────────────────
@@ -279,6 +371,7 @@ async def promote_file(
 async def run_watcher(
     pending_dir: Path,
     staged_dir: Path,
+    saved_dir: Path,
     *,
     quiet_seconds: float = 60.0,
     tick_seconds: float = 5.0,
@@ -292,16 +385,17 @@ async def run_watcher(
     if owns_client:
         client = httpx.AsyncClient()
     logger.info(
-        "enricher watcher started pending=%s staged=%s quiet=%.0fs tick=%.0fs",
+        "enricher watcher started pending=%s staged=%s saved=%s quiet=%.0fs tick=%.0fs",
         pending_dir,
         staged_dir,
+        saved_dir,
         quiet_seconds,
         tick_seconds,
     )
     try:
         while True:
             try:
-                await _tick(pending_dir, staged_dir, quiet_seconds, client)
+                await _tick(pending_dir, staged_dir, saved_dir, quiet_seconds, client)
             except Exception as e:  # defensive — never let the loop die
                 logger.warning("enricher tick failed: %s", e)
             await asyncio.sleep(tick_seconds)
@@ -328,9 +422,10 @@ def main() -> None:
     log_root = Path(os.environ.get("TMUX_MCP_LOG_DIR", "./logs")).expanduser()
     pending = log_root / "pending"
     staged = log_root / "staged"
-    print(f"tmux-mcp-enricher: watching {pending} → {staged}")
+    saved = log_root / "saved"
+    print(f"tmux-mcp-enricher: watching {pending} → {staged} (saved: {saved})")
     try:
-        asyncio.run(run_watcher(pending, staged))
+        asyncio.run(run_watcher(pending, staged, saved))
     except KeyboardInterrupt:
         print("\nShutting down.")
 
@@ -342,6 +437,7 @@ if __name__ == "__main__":
 async def _tick(
     pending_dir: Path,
     staged_dir: Path,
+    saved_dir: Path,
     quiet_seconds: float,
     client: httpx.AsyncClient,
 ) -> None:
@@ -357,4 +453,4 @@ async def _tick(
             continue
         if now - mtime < quiet_seconds:
             continue
-        await promote_file(entry, staged_dir, client)
+        await promote_file(entry, staged_dir, saved_dir, client)
