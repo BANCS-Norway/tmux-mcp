@@ -6,14 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Install deps: `uv sync`
 - Run server: `uv run tmux-mcp`
+- Run enricher: `uv run tmux-mcp-enricher`
 - Lint / format: `uv run ruff check` / `uv run ruff format`
+- Run tests: `uv run pytest`
 - Health check: `curl http://localhost:8747/healthz`
 
-There is no test suite. Python 3.13+ is required (see `.python-version`, `pyproject.toml`).
+Python 3.13+ is required (see `.python-version`, `pyproject.toml`). Before pushing, every commit should pass `uv run ruff check`, `uv run ruff format --check`, and `uv run pytest` — CI runs the same checks.
+
+### Pre-commit hooks
+
+The repo ships a `.pre-commit-config.yaml` that runs ruff + pytest as a Git hook. Enable once per clone:
+
+```
+uv run pre-commit install
+```
+
+After that, `git commit` runs the hooks automatically and blocks the commit if anything fails. Use `git commit --no-verify` only when you genuinely need to bypass them.
 
 ## Architecture
 
-This is an MCP server (FastMCP, streamable HTTP transport) that exposes three tmux-driving tools (`tmux_list_sessions`, `tmux_get_summary`, `tmux_send_prompt`) to remote Claude clients. It is designed to be fronted by `tailscale serve` for HTTPS and tailnet-only reachability.
+This is an MCP server (FastMCP, streamable HTTP transport) that exposes tmux-driving tools (`tmux_list_sessions`, `tmux_get_summary`, `tmux_send_prompt`) and abuse-pipeline tools (`abuse_get_pending`, `abuse_get_staged`, `abuse_list_reported`, `abuse_send_report`) to remote Claude clients. It is designed to be fronted by `tailscale serve` for HTTPS and tailnet-only reachability.
 
 Two modules, tightly coupled through `FastMCP`:
 
