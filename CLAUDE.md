@@ -16,18 +16,18 @@ Python 3.13+ is required (see `.python-version`, `pyproject.toml`). Before pushi
 
 ### Tab-completion for `tmux-mcp-report`
 
-The CLI uses [`argcomplete`](https://github.com/kislyuk/argcomplete). Register once per shell so that `tmux-mcp-report <TAB>` completes against `logs/staged/*.log`:
+The CLI uses [`argcomplete`](https://github.com/kislyuk/argcomplete). Use the built-in helper to print the right snippet for your shell, then append it to your rc file:
 
 ```sh
-# bash
-eval "$(register-python-argcomplete tmux-mcp-report)"
+# auto-detect from $SHELL
+echo "$(uv run tmux-mcp-report --register)" >> ~/.zshrc
 
-# zsh
-autoload -U compinit && compinit
-eval "$(register-python-argcomplete tmux-mcp-report)"
+# explicit
+uv run tmux-mcp-report --register bash >> ~/.bashrc
+uv run tmux-mcp-report --register zsh  >> ~/.zshrc
 ```
 
-Add the appropriate line to `~/.bashrc` / `~/.zshrc` to make it permanent. The CLI works without registration — completion just won't fire.
+Reload the shell (or `source` the rc file) and `tmux-mcp-report <TAB>` completes against `logs/staged/*.log`. The CLI works without registration — completion just won't fire.
 
 ### Pre-commit hooks
 

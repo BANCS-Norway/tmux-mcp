@@ -15,15 +15,15 @@ Registration), so it works as a remote connector in the Claude mobile app.
 | `tmux-mcp-enricher`  | Watch `logs/pending/`, enrich + move files to `logs/staged/`            |
 | `tmux-mcp-report`    | Submit staged abuse reports from the shell (`--list`, `--all`, or a filename) |
 
-`tmux-mcp-report` supports tab-completion of staged filenames. Enable it once per shell by adding to your `~/.bashrc` or `~/.zshrc`:
+`tmux-mcp-report` supports tab-completion of staged filenames. The CLI prints the right snippet for your shell — pipe it into your rc file:
 
 ```sh
-# bash
-eval "$(register-python-argcomplete tmux-mcp-report)"
+# auto-detect from $SHELL
+echo "$(tmux-mcp-report --register)" >> ~/.zshrc
 
-# zsh
-autoload -U compinit && compinit
-eval "$(register-python-argcomplete tmux-mcp-report)"
+# or pick the shell explicitly
+tmux-mcp-report --register bash >> ~/.bashrc
+tmux-mcp-report --register zsh  >> ~/.zshrc
 ```
 
 ## Tools
