@@ -7,6 +7,25 @@ on the host machine. Authenticates users via **GitHub OAuth**; the MCP server
 itself is a full OAuth 2.1 authorization server (with Dynamic Client
 Registration), so it works as a remote connector in the Claude mobile app.
 
+## Commands
+
+| Command              | What it does                                                            |
+| -------------------- | ----------------------------------------------------------------------- |
+| `tmux-mcp`           | Run the MCP server (the OAuth + tool host)                              |
+| `tmux-mcp-enricher`  | Watch `logs/pending/`, enrich + move files to `logs/staged/`            |
+| `tmux-mcp-report`    | Submit staged abuse reports from the shell (`--list`, `--all`, or a filename) |
+
+`tmux-mcp-report` supports tab-completion of staged filenames. Enable it once per shell by adding to your `~/.bashrc` or `~/.zshrc`:
+
+```sh
+# bash
+eval "$(register-python-argcomplete tmux-mcp-report)"
+
+# zsh
+autoload -U compinit && compinit
+eval "$(register-python-argcomplete tmux-mcp-report)"
+```
+
 ## Tools
 
 | Tool                  | What it does                                                  |

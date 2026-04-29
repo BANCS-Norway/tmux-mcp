@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 """Abuse-pipeline reporting — MCP tool implementations and CLI.
 
 Four tools expose the pipeline state and let the agent submit reports:
@@ -30,6 +31,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import argcomplete
 import httpx
 from dotenv import load_dotenv
 
@@ -379,6 +381,23 @@ async def _send_many(log_root: Path, filenames: list[str], api_key: str | None) 
     return 0 if failures == 0 else 1
 
 
+def _staged_completer(prefix: str, **_kwargs) -> list[str]:
+    """argcomplete completer that lists matching staged filenames.
+
+    Reads ``TMUX_MCP_LOG_DIR`` directly (no .env load) so completion stays
+    fast and side-effect-free.
+    """
+    log_root = Path(os.environ.get("TMUX_MCP_LOG_DIR", "./logs")).expanduser()
+    staged = log_root / "staged"
+    if not staged.is_dir():
+        return []
+    return [
+        f.name
+        for f in staged.iterdir()
+        if f.is_file() and f.suffix == ".log" and f.name.startswith(prefix)
+    ]
+
+
 def cli_main() -> int:
     """Console-script entry point for ``tmux-mcp-report``."""
     parser = argparse.ArgumentParser(
@@ -386,11 +405,12 @@ def cli_main() -> int:
         description="Submit staged abuse reports to AbuseIPDB.",
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    filename_arg = group.add_argument(
         "filename",
         nargs="?",
         help="Bare *.log filename in logs/staged/ (e.g. 1.2.3.4.log).",
     )
+    filename_arg.completer = _staged_completer  # type: ignore[attr-defined]
     group.add_argument(
         "--all",
         action="store_true",
@@ -401,6 +421,7 @@ def cli_main() -> int:
         action="store_true",
         help="List staged filenames and exit.",
     )
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
     load_dotenv()

@@ -7,12 +7,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Install deps: `uv sync`
 - Run server: `uv run tmux-mcp`
 - Run enricher: `uv run tmux-mcp-enricher`
-- Submit a staged report: `uv run tmux-mcp-report <filename.log>` (also `--list`, `--all`)
+- Submit a staged report: `uv run tmux-mcp-report <filename.log>` (also `--list`, `--all`). Tab-completion via argcomplete — see below.
 - Lint / format: `uv run ruff check` / `uv run ruff format`
 - Run tests: `uv run pytest`
 - Health check: `curl http://localhost:8747/healthz`
 
 Python 3.13+ is required (see `.python-version`, `pyproject.toml`). Before pushing, every commit should pass `uv run ruff check`, `uv run ruff format --check`, and `uv run pytest` — CI runs the same checks.
+
+### Tab-completion for `tmux-mcp-report`
+
+The CLI uses [`argcomplete`](https://github.com/kislyuk/argcomplete). Register once per shell so that `tmux-mcp-report <TAB>` completes against `logs/staged/*.log`:
+
+```sh
+# bash
+eval "$(register-python-argcomplete tmux-mcp-report)"
+
+# zsh
+autoload -U compinit && compinit
+eval "$(register-python-argcomplete tmux-mcp-report)"
+```
+
+Add the appropriate line to `~/.bashrc` / `~/.zshrc` to make it permanent. The CLI works without registration — completion just won't fire.
 
 ### Pre-commit hooks
 
