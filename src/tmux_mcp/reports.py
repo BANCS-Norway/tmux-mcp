@@ -1,4 +1,4 @@
-"""Abuse-pipeline reporting — MCP tool implementations.
+"""Abuse-pipeline reporting — MCP tool implementations and CLI.
 
 Four tools expose the pipeline state and let the agent submit reports:
 
@@ -12,17 +12,26 @@ empty folders render a polite empty-state string — never an error.
 
 The module is a library: tests drive these functions directly against temp
 directories. ``server.py`` registers the thin ``@mcp.tool`` wrappers.
+
+The ``cli_main`` entry point exposes the same submission surface as a shell
+command (``tmux-mcp-report``) for operators who want to fire reports without
+going through the MCP server.
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import logging
+import os
 import re
 import shutil
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 
 from tmux_mcp.enricher import promote_file
 
@@ -335,3 +344,91 @@ async def send_report(
     finally:
         if owns_client:
             await client.aclose()
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────
+
+
+def _list_staged(log_root: Path) -> str:
+    staged = log_root / "staged"
+    if not staged.is_dir():
+        return EMPTY_STAGED
+    files = sorted(
+        f.name for f in staged.iterdir() if f.is_file() and f.suffix == ".log"
+    )
+    if not files:
+        return EMPTY_STAGED
+    return "\n".join(files)
+
+
+async def _send_many(log_root: Path, filenames: list[str], api_key: str | None) -> int:
+    """Submit each filename in turn. Returns 0 if all succeeded, 1 otherwise."""
+    failures = 0
+    async with httpx.AsyncClient() as client:
+        for fn in filenames:
+            print(f"=== {fn} ===")
+            result = await send_report(log_root, fn, api_key, client=client)
+            print(result)
+            print()
+            # send_report returns a string; submission failure paths all
+            # contain "Cannot", "Invalid", "not found", "rejected", or
+            # "request failed" — anything that isn't a successful HTTP 200
+            # archive. The successful path always says "Archived to".
+            if "Archived to" not in result:
+                failures += 1
+    return 0 if failures == 0 else 1
+
+
+def cli_main() -> int:
+    """Console-script entry point for ``tmux-mcp-report``."""
+    parser = argparse.ArgumentParser(
+        prog="tmux-mcp-report",
+        description="Submit staged abuse reports to AbuseIPDB.",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "filename",
+        nargs="?",
+        help="Bare *.log filename in logs/staged/ (e.g. 1.2.3.4.log).",
+    )
+    group.add_argument(
+        "--all",
+        action="store_true",
+        help="Submit every staged file in turn.",
+    )
+    group.add_argument(
+        "--list",
+        action="store_true",
+        help="List staged filenames and exit.",
+    )
+    args = parser.parse_args()
+
+    load_dotenv()
+    log_root = Path(os.environ.get("TMUX_MCP_LOG_DIR", "./logs")).expanduser()
+    api_key = os.environ.get("TMUX_MCP_ABUSEIPDB_KEY")
+
+    if args.list:
+        print(_list_staged(log_root))
+        return 0
+
+    if args.all:
+        staged = log_root / "staged"
+        if not staged.is_dir():
+            print(EMPTY_STAGED)
+            return 0
+        files = sorted(
+            f.name for f in staged.iterdir() if f.is_file() and f.suffix == ".log"
+        )
+        if not files:
+            print(EMPTY_STAGED)
+            return 0
+        return asyncio.run(_send_many(log_root, files, api_key))
+
+    if not args.filename:
+        parser.error("provide a filename, --all, or --list")
+
+    return asyncio.run(_send_many(log_root, [args.filename], api_key))
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())
