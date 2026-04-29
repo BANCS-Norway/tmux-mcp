@@ -42,6 +42,16 @@ The `abuse_*` tools pair with the [optional abuse reporting pipeline](#abuse-rep
 
 ## Setup
 
+### Prerequisites — install uv
+
+`tmux-mcp` is built and run with [uv](https://docs.astral.sh/uv/). Install it via [astral's instructions](https://docs.astral.sh/uv/getting-started/installation/), e.g.:
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Once you have `uv` on `$PATH` you can pick either install style below.
+
 ### 1. Expose the server over HTTPS
 
 Claude remote connectors require `https://`. The easiest path is
@@ -91,10 +101,40 @@ Optional:
 
 ### 4. Install & run
 
+Two install styles — pick one:
+
+**Style A — global tool (commands on `$PATH`)**
+
+Install directly from the repo URL:
+
 ```sh
+uv tool install git+https://github.com/BANCS-Norway/tmux-mcp
+tmux-mcp
+```
+
+…or from a local clone (handy if you've already cloned for `.env.example` etc.):
+
+```sh
+git clone https://github.com/BANCS-Norway/tmux-mcp
+cd tmux-mcp
+uv tool install .
+tmux-mcp
+```
+
+Either form installs `tmux-mcp`, `tmux-mcp-enricher`, and `tmux-mcp-report` into `~/.local/bin` (or wherever `uv tool install` puts them). After that you can drop the `uv run` prefix everywhere — the Commands table at the top of this README assumes this style.
+
+To upgrade later: `uv tool upgrade tmux-mcp`.
+
+**Style B — development clone (uses `uv run`)**
+
+```sh
+git clone https://github.com/BANCS-Norway/tmux-mcp
+cd tmux-mcp
 uv sync
 uv run tmux-mcp
 ```
+
+Best when you're hacking on the code. Every snippet in this README that says `tmux-mcp-...` becomes `uv run tmux-mcp-...` from inside the repo.
 
 ### 5. Add as a connector in Claude
 
@@ -139,7 +179,7 @@ A three-part pipeline for collecting malicious IP activity and submitting report
 2. **Enricher** — a separate process watches `pending/`, debounces (60s quiet window), looks up ASN + country via RIPE Stat, detects AbuseIPDB categories, and moves files to `staged/`. Run alongside the server:
 
    ```sh
-   uv run tmux-mcp-enricher
+   tmux-mcp-enricher
    ```
 
    Runs independently — restart either without affecting the other. RIPE lookup failures are non-fatal; enrichment proceeds with `unknown` fields.
@@ -158,7 +198,7 @@ A three-part pipeline for collecting malicious IP activity and submitting report
    TMUX_MCP_ABUSEIPDB_KEY=your-key-here
    ```
 
-5. Restart the server (`uv run tmux-mcp`) so it picks up the new env var.
+5. Restart the server (`tmux-mcp`) so it picks up the new env var.
 
 Without the key, `abuse_send_report` returns a clear error instead of attempting the call — the collector and enricher run fine without it, so you can start gathering data before deciding whether to submit.
 
