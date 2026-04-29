@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 
 logger = logging.getLogger("tmux_mcp.enricher")
@@ -414,7 +414,7 @@ def main() -> None:
     forever. Runs independently of the MCP server — start it alongside via
     systemd, supervisor, tmux, or anything else.
     """
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",

@@ -23,7 +23,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -38,8 +38,10 @@ from tmux_mcp.auth import STATE_DIR, GithubOAuthProvider
 from tmux_mcp.ratelimit import RateLimitMiddleware
 from tmux_mcp import reports as _reports
 
-# Load .env from CWD or project root before any env reads.
-load_dotenv()
+# Load .env by walking up from the user's CWD (not the install location).
+# Without ``usecwd=True`` find_dotenv would walk up from this file, which
+# never reaches the user's repo when tmux-mcp is installed via ``uv tool``.
+load_dotenv(find_dotenv(usecwd=True))
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
