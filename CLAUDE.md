@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Install deps: `uv sync`
 - Run server: `uv run tmux-mcp`
 - Run enricher: `uv run tmux-mcp-enricher`
+- Submit a staged report: `uv run tmux-mcp-report <filename.log>` (also `--list`, `--all`)
 - Lint / format: `uv run ruff check` / `uv run ruff format`
 - Run tests: `uv run pytest`
 - Health check: `curl http://localhost:8747/healthz`

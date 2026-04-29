@@ -338,3 +338,87 @@ def test_send_report_no_categories_refuses(log_root):
     assert "no categories" in result
     client.post.assert_not_called()
     assert (log_root / "staged" / "1.2.3.4.log").exists()
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────
+
+
+def test_cli_list_empty(log_root, monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--list"])
+
+    rc = cli_main()
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == EMPTY_STAGED
+
+
+def test_cli_list_returns_filenames(log_root, monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    _write_staged(
+        log_root,
+        "1.2.3.4",
+        {"IP": "1.2.3.4", "AbuseIPDB-Categories": "19"},
+        ["2026-04-23T10:00:00Z GET /.env 429"],
+    )
+    _write_staged(
+        log_root,
+        "5.6.7.8",
+        {"IP": "5.6.7.8", "AbuseIPDB-Categories": "21"},
+        ["2026-04-23T10:00:00Z GET /a 429"],
+    )
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--list"])
+
+    rc = cli_main()
+    assert rc == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert sorted(out) == ["1.2.3.4.log", "5.6.7.8.log"]
+
+
+def test_cli_submit_filename_succeeds(log_root, monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    _write_staged(
+        log_root,
+        "1.2.3.4",
+        {"IP": "1.2.3.4", "AbuseIPDB-Categories": "19"},
+        ["2026-04-23T10:00:00Z GET /.env 429"],
+    )
+
+    async def fake_send_report(log_root_arg, filename, api_key, client=None):
+        return f"AbuseIPDB accepted submission (HTTP 200)\nArchived to {filename}."
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    monkeypatch.setenv("TMUX_MCP_ABUSEIPDB_KEY", "test-key")
+    monkeypatch.setattr("tmux_mcp.reports.send_report", fake_send_report)
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "1.2.3.4.log"])
+
+    rc = cli_main()
+    assert rc == 0
+    assert "Archived to" in capsys.readouterr().out
+
+
+def test_cli_submit_failure_returns_nonzero(log_root, monkeypatch):
+    from tmux_mcp.reports import cli_main
+
+    async def fake_send_report(log_root_arg, filename, api_key, client=None):
+        return "AbuseIPDB rejected submission (HTTP 422): bad categories"
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    monkeypatch.setattr("tmux_mcp.reports.send_report", fake_send_report)
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "1.2.3.4.log"])
+
+    assert cli_main() == 1
+
+
+def test_cli_no_args_errors(log_root, monkeypatch):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report"])
+    with pytest.raises(SystemExit):
+        cli_main()
