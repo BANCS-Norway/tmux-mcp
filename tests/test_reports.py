@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -509,3 +512,27 @@ def test_cli_register_unknown_shell_rejected(monkeypatch):
     monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register", "fish"])
     with pytest.raises(SystemExit):
         cli_main()
+
+
+def test_reports_import_does_not_require_oauth_env(tmp_path):
+    """Regression for #32: importing tmux_mcp.reports in a process with no
+    OAuth env vars must not trigger server.py's validation. Runs in a
+    subprocess so conftest's env doesn't leak in, and CWD is set to a
+    temp dir so find_dotenv has nothing to find on the upward walk.
+    """
+    clean_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "PYTHONPATH": os.pathsep.join(sys.path),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import tmux_mcp.reports"],
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, (
+        f"importing tmux_mcp.reports failed in clean env:\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )

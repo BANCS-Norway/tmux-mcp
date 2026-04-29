@@ -33,7 +33,7 @@ from pathlib import Path
 
 import argcomplete
 import httpx
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from tmux_mcp.enricher import promote_file
 
@@ -465,7 +465,7 @@ def cli_main() -> int:
         print(_shell_completion_snippet(shell), end="")
         return 0
 
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
     log_root = Path(os.environ.get("TMUX_MCP_LOG_DIR", "./logs")).expanduser()
     api_key = os.environ.get("TMUX_MCP_ABUSEIPDB_KEY")
 
