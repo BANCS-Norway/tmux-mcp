@@ -456,3 +456,56 @@ def test_staged_completer_handles_missing_dir(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(tmp_path / "nope"))
     assert _staged_completer("") == []
+
+
+def test_cli_register_bash_prints_snippet(monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register", "bash"])
+    rc = cli_main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'eval "$(register-python-argcomplete tmux-mcp-report)"' in out
+    assert "compinit" not in out
+
+
+def test_cli_register_zsh_includes_compinit(monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register", "zsh"])
+    rc = cli_main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "autoload -U compinit && compinit" in out
+    assert 'eval "$(register-python-argcomplete tmux-mcp-report)"' in out
+
+
+def test_cli_register_autodetect_zsh_from_env(monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register"])
+    rc = cli_main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "compinit" in out
+
+
+def test_cli_register_autodetect_falls_back_to_bash(monkeypatch, capsys):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register"])
+    rc = cli_main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "compinit" not in out
+    assert 'eval "$(register-python-argcomplete tmux-mcp-report)"' in out
+
+
+def test_cli_register_unknown_shell_rejected(monkeypatch):
+    from tmux_mcp.reports import cli_main
+
+    monkeypatch.setattr("sys.argv", ["tmux-mcp-report", "--register", "fish"])
+    with pytest.raises(SystemExit):
+        cli_main()

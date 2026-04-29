@@ -381,6 +381,31 @@ async def _send_many(log_root: Path, filenames: list[str], api_key: str | None) 
     return 0 if failures == 0 else 1
 
 
+_REGISTER_SHELLS = ("bash", "zsh")
+
+
+def _shell_completion_snippet(shell: str) -> str:
+    """Return the eval-snippet a user pastes into ~/.bashrc or ~/.zshrc."""
+    base = 'eval "$(register-python-argcomplete tmux-mcp-report)"'
+    if shell == "zsh":
+        return (
+            "# Tab-completion for tmux-mcp-report\n"
+            "autoload -U compinit && compinit\n"
+            f"{base}\n"
+        )
+    # bash and unknown shells get the bash form (works in most POSIX shells).
+    return f"# Tab-completion for tmux-mcp-report\n{base}\n"
+
+
+def _detect_shell() -> str:
+    """Detect the user's shell from ``$SHELL``. Default to bash."""
+    shell_env = os.environ.get("SHELL", "")
+    name = Path(shell_env).name if shell_env else ""
+    if name in _REGISTER_SHELLS:
+        return name
+    return "bash"
+
+
 def _staged_completer(prefix: str, **_kwargs) -> list[str]:
     """argcomplete completer that lists matching staged filenames.
 
@@ -421,8 +446,24 @@ def cli_main() -> int:
         action="store_true",
         help="List staged filenames and exit.",
     )
+    group.add_argument(
+        "--register",
+        nargs="?",
+        const="",
+        choices=("", *_REGISTER_SHELLS),
+        metavar="SHELL",
+        help=(
+            "Print shell-completion setup snippet and exit. "
+            "SHELL is bash or zsh (defaults to autodetect from $SHELL)."
+        ),
+    )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
+
+    if args.register is not None:
+        shell = args.register or _detect_shell()
+        print(_shell_completion_snippet(shell), end="")
+        return 0
 
     load_dotenv()
     log_root = Path(os.environ.get("TMUX_MCP_LOG_DIR", "./logs")).expanduser()
