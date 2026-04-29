@@ -422,3 +422,37 @@ def test_cli_no_args_errors(log_root, monkeypatch):
     monkeypatch.setattr("sys.argv", ["tmux-mcp-report"])
     with pytest.raises(SystemExit):
         cli_main()
+
+
+def test_staged_completer_matches_prefix(log_root, monkeypatch):
+    from tmux_mcp.reports import _staged_completer
+
+    _write_staged(
+        log_root,
+        "1.2.3.4",
+        {"IP": "1.2.3.4", "AbuseIPDB-Categories": "19"},
+        ["2026-04-23T10:00:00Z GET /.env 429"],
+    )
+    _write_staged(
+        log_root,
+        "1.2.99.99",
+        {"IP": "1.2.99.99", "AbuseIPDB-Categories": "21"},
+        ["2026-04-23T10:00:00Z GET /a 429"],
+    )
+    _write_staged(
+        log_root,
+        "9.9.9.9",
+        {"IP": "9.9.9.9", "AbuseIPDB-Categories": "21"},
+        ["2026-04-23T10:00:00Z GET /b 429"],
+    )
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(log_root))
+    matches = _staged_completer("1.2.")
+    assert sorted(matches) == ["1.2.3.4.log", "1.2.99.99.log"]
+
+
+def test_staged_completer_handles_missing_dir(tmp_path, monkeypatch):
+    from tmux_mcp.reports import _staged_completer
+
+    monkeypatch.setenv("TMUX_MCP_LOG_DIR", str(tmp_path / "nope"))
+    assert _staged_completer("") == []
